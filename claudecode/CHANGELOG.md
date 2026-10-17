@@ -23,6 +23,16 @@ All notable changes to this project will be documented in this file.
   Claude snapshots outside changes before its first edit, commits each logical change
   with a descriptive message, keeps no `.bak` copies and never force-adds or skips the
   check; when it is not, Claude offers the setup once instead of doing it unasked.
+- **`CLAUDE.md`: "Working on a live Home Assistant"**: habits that prevent known failure
+  modes: read live state before acting; reload rather than restart, and `ha core check`
+  first; finish and write up before a restart (it can end the session); never hand-edit
+  `.storage/` while HA runs (it is rewritten from memory on shutdown); dashboard and
+  `/local/` caching; `shell_command` paths and the noexec mount; string-vs-boolean
+  templates; restart-replayed state triggers; statistics display units; rationale in
+  `description:`; recovering a stuck Supervisor update.
+- **`ha-ws`**: stdlib-only WebSocket API client
+  (`ha-ws '{"type": "config/entity_registry/update", ...}'`, a JSON file, or `-` for
+  stdin; one result per line, exit 1 on any failed command).
 
 ## [1.2.65-con.19] - 2026-09-17
 

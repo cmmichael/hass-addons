@@ -228,6 +228,10 @@ session and commits each change with a descriptive message. To change that workf
 your own rules in `CLAUDE.user.md`. The jobs package token is kept out of git
 automatically — see [docs/JOBS.md](docs/JOBS.md#git-backed-config-directories).
 
+`ha-ws` (in the terminal) sends commands to Home Assistant's WebSocket API, for changes
+that must not be made by editing `.storage/` while HA runs:
+`ha-ws '{"type": "config/entity_registry/update", "entity_id": "light.a", "new_entity_id": "light.b"}'`.
+
 ## Scheduled jobs (Claude Jobs)
 
 A **job** is an unattended, read-only Claude run — a Markdown file in

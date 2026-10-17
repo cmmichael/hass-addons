@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Send commands to Home Assistant's WebSocket API (stdlib only, no pip deps).
+
+Usage:
+  ha-ws '{"type": "config/entity_registry/update", "entity_id": "light.a", "new_entity_id": "light.b"}'
+  ha-ws commands.json          # a JSON list of command objects
+  echo '[{...}, {...}]' | ha-ws -
+
+Each command is a message object without "id" (ids are assigned in order). Prints one
+JSON result per command, one per line. Exits 1 if any result has "success": false.
+
+Use it for what the REST API cannot do and what must not be done by editing .storage/
+while HA runs (HA rewrites those files from memory on shutdown): entity/device/area
+registry updates, lovelace/config/save, energy/save_prefs, recorder statistics queries.
+Talks to the Supervisor proxy with $SUPERVISOR_TOKEN.
+"""
+import base64
+import json
+import os
+import socket
+import struct
+import sys
+
+HOST = "supervisor"
+PORT = 80
+PATH = "/core/websocket"
+
+
+def ws_connect():
+    s = socket.create_connection((HOST, PORT), timeout=30)
+    key = base64.b64encode(os.urandom(16)).decode()
+    req = (
+        f"GET {PATH} HTTP/1.1\r\n"
+        f"Host: {HOST}\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+    )
+    s.sendall(req.encode())
+    resp = b""
+    while b"\r\n\r\n" not in resp:
+        chunk = s.recv(4096)
+        if not chunk:
+            raise RuntimeError("handshake failed: connection closed")
+        resp += chunk
+    status = resp.split(b"\r\n", 1)[0].decode()
+    if " 101 " not in status + " ":
+        raise RuntimeError(f"handshake failed: {status}")
+    return s
+
+
+def send_frame(s, payload: bytes, opcode=0x1):
+    mask = os.urandom(4)
+    header = bytes([0x80 | opcode])  # FIN + opcode (text by default)
+    n = len(payload)
+    if n < 126:
+        header += bytes([0x80 | n])
+    elif n < 65536:
+        header += bytes([0x80 | 126]) + struct.pack(">H", n)
+    else:
+        header += bytes([0x80 | 127]) + struct.pack(">Q", n)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    s.sendall(header + mask + masked)
+
+
+def recv_exact(s, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = s.recv(n - len(buf))
+        if not chunk:
+            raise RuntimeError("connection closed")
+        buf += chunk
+    return buf
+
+
+def recv_message(s):
+    """One complete message (reassembles continuation frames, answers pings)."""
+    parts = []
+    while True:
+        b1, b2 = recv_exact(s, 2)
+        fin, opcode = b1 & 0x80, b1 & 0x0F
+        n = b2 & 0x7F
+        if n == 126:
+            n = struct.unpack(">H", recv_exact(s, 2))[0]
+        elif n == 127:
+            n = struct.unpack(">Q", recv_exact(s, 8))[0]
+        payload = recv_exact(s, n) if n else b""
+        if opcode == 0x9:  # ping -> pong; it must be a pong frame: HA drops the
+            send_frame(s, payload, 0xA)  # connection ("invalid JSON") if it arrives as text
+            continue
+        if opcode == 0xA:
+            continue
+        if opcode == 0x8:
+            raise RuntimeError("server closed connection")
+        parts.append(payload)
+        if fin:
+            return json.loads(b"".join(parts).decode())
+
+
+def load_commands(arg):
+    if arg == "-":
+        data = json.load(sys.stdin)
+    elif arg.lstrip().startswith(("{", "[")):
+        data = json.loads(arg)
+    else:
+        with open(arg) as f:
+            data = json.load(f)
+    return data if isinstance(data, list) else [data]
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        sys.exit(0 if len(sys.argv) == 2 else 2)
+    cmds = load_commands(sys.argv[1])
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        sys.exit("ha-ws: SUPERVISOR_TOKEN is not set")
+    s = ws_connect()
+    msg = recv_message(s)
+    if msg.get("type") != "auth_required":
+        sys.exit(f"ha-ws: unexpected greeting: {msg}")
+    send_frame(s, json.dumps({"type": "auth", "access_token": token}).encode())
+    msg = recv_message(s)
+    if msg.get("type") != "auth_ok":
+        sys.exit(f"ha-ws: authentication failed: {msg.get('message', msg.get('type'))}")
+    ok = True
+    for mid, cmd in enumerate(cmds, start=1):
+        send_frame(s, json.dumps(dict(cmd, id=mid)).encode())
+        while True:
+            resp = recv_message(s)
+            if resp.get("id") == mid and resp.get("type") == "result":
+                print(json.dumps(resp))
+                ok = ok and resp.get("success", False)
+                break
+    s.close()
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()
