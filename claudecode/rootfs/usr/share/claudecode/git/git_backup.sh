@@ -12,12 +12,17 @@
 # not /homeassistant. Push auth comes from the repository's own config (a credential in
 # the remote URL or a repo-local credential helper) — nothing in the HA Core container's
 # home directory survives an HA update.
-cd /config || exit 1
+#
+# A failed add or commit (a stale .git/index.lock, no identity, "dubious ownership") exits
+# non-zero with git's message, so the shell_command fails visibly instead of pushing
+# nothing and reporting success.
+cd "${HA_CONFIG_DIR:-/config}" || exit 1
 
-git add -A >/dev/null 2>&1
+out=$(git add -A 2>&1) || { echo "git_backup: git add failed: $out"; exit 1; }
 
 if ! git diff --cached --quiet; then
-  git commit -m "Auto-backup: $(date '+%Y-%m-%d %H:%M')" >/dev/null 2>&1
+  out=$(git commit -m "Auto-backup: $(date '+%Y-%m-%d %H:%M')" 2>&1) \
+    || { echo "git_backup: git commit failed: $out"; exit 1; }
 fi
 
 # Push even when nothing was committed: a no-op push is cheap and also delivers earlier

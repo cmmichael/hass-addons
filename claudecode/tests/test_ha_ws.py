@@ -51,6 +51,7 @@ class TestHaWs(unittest.TestCase):
     def serve(self):
         try:
             c, _ = self.srv.accept()
+            self.addCleanup(c.close)
             d = b""
             while b"\r\n\r\n" not in d:
                 d += c.recv(4096)
@@ -66,6 +67,10 @@ class TestHaWs(unittest.TestCase):
                     c.sendall(frame({"id": m["id"], "type": "pong"}))
                 elif m["type"] == "slow":
                     time.sleep(5)
+                elif m["type"] == "never":      # no reply, but heartbeat pings and events keep coming
+                    for _ in range(40):
+                        c.sendall(bytes([0x89, 0]) + frame({"id": 99, "type": "event"}))
+                        time.sleep(0.2)
                 else:
                     c.sendall(frame({"id": m["id"], "type": "result", "success": m["type"] != "bad"}))
         except (OSError, ConnectionError):
@@ -111,6 +116,13 @@ class TestHaWs(unittest.TestCase):
             self.assertIn(text, r.stderr)
             self.assertNotIn("Traceback", r.stderr)
             self.assertEqual(len(r.stderr.strip().splitlines()), 1, r.stderr)
+
+    def test_timeout_is_a_deadline_not_an_idle_timer(self):
+        t = time.monotonic()
+        r = self.run_ws("--timeout", "1", '{"type": "never"}')
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("no reply to command 1 (never) within 1 s", r.stderr)
+        self.assertLess(time.monotonic() - t, 5)
 
     def test_missing_token(self):
         r = self.run_ws('{"type": "a"}', token="")

@@ -21,11 +21,32 @@ secrets.yaml
 *.key
 *.p12
 *.pfx
+*.jks
+*.ppk
+*.kdbx
 id_rsa*
 id_ed25519*
 .ssh/
-# Add here every file that holds a credential inline instead of through !secret — e.g. the
-# YAML config some add-ons keep in the config directory.
+.env
+*.env
+# Token caches and key files that integrations and add-ons drop into the config directory.
+*.token
+/*.conf
+*.session
+.spotify-token-cache*
+icloud/
+SERVICE_ACCOUNT.json
+*service_account*.json
+*service-account*.json
+# Zigbee2MQTT: coordinator_backup.json and configuration.yaml hold the Zigbee network key
+# (and often the MQTT password). To track its configuration.yaml, move those values to
+# zigbee2mqtt/secret.yaml first, then add "!/zigbee2mqtt/configuration.yaml".
+/zigbee2mqtt/*
+coordinator_backup.json
+# THE REST OF THE CONFIG ROOT IS NOT A WHITELIST: a file nobody listed here is tracked.
+# Add every file that holds a credential inline instead of through !secret — ESPHome
+# device YAML with an inline "encryption: key:", an add-on's own config file — and check
+# what a newly installed add-on or integration wrote before the next commit.
 
 # The Claude Code add-on's generated jobs package carries the endpoint bearer token. The
 # add-on also puts it in .git/info/exclude on every start; this line covers clones.

@@ -55,6 +55,8 @@ The template ignores everything that can hold a credential and treats `.storage/
 
 - Add every file that holds a credential inline (some add-ons keep their YAML config in
   `/homeassistant`) — or better, move the credential to `secrets.yaml` and use `!secret`.
+  Outside `.storage/` and `.claudecode/` the template is a blacklist: it knows the common
+  cases (key files, token caches, Zigbee2MQTT, service-account JSON), not every add-on.
 - Look at `ls .storage` and whitelist only what is valuable and token-free. Never whitelist
   `auth*`, `core.config_entries`, `application_credentials`, `cloud`, `mobile_app` or an
   integration's own token store.
@@ -67,12 +69,17 @@ The template ignores everything that can hold a credential and treats `.storage/
 git add -A
 git status --short | less                      # every file of the first commit
 git status --ignored --short | grep '^!!'      # what is being left out
-rg -n -i '(api_key|password|token|secret|bearer)\s*:' --glob '*.yaml' --glob '!secrets.yaml' .
+# credential-looking keys in everything staged (YAML, JSON, conf ...), HACS code left out
+git ls-files -z -- . ':!custom_components' ':!www/community' | xargs -0 -r rg -n -i \
+  -e '(api_?key|password|passwd|token|secret|bearer|psk|network_key|private_key|\bkey)["'\'']?\s*[:=]' \
+  -e 'PRIVATE KEY-----'
 sh /usr/local/share/claudecode/git-hooks/pre-commit
 ```
 
-Every hit from the `rg` line must be a `!secret` reference or moved into `secrets.yaml`
-before the first commit — git history keeps a credential even after the file is fixed.
+Every hit from the `rg` line must be a `!secret` reference, moved into `secrets.yaml`, or
+its file ignored before the first commit (ESPHome `encryption: key:`, a Zigbee
+`network_key`, dashboard URLs with a token) — git history keeps a credential even after
+the file is fixed.
 
 ### 4. First commit, private remote
 
@@ -130,8 +137,10 @@ shell_command:
 
 `shell_command` runs inside the HA Core container, which has git: the path there is
 `/config`, not `/homeassistant`. The hook path does not exist in that container, so git
-skips the check there — the whitelist `.gitignore` is what keeps credentials out of these
-commits.
+skips the check there — the `.gitignore` alone keeps credentials out of these commits.
+After installing an add-on or integration that writes into the config directory, look at
+`git status` before the next backup runs. The script exits non-zero with git's message
+when the add or commit fails; the push output is its normal result.
 
 ## What to expect
 
@@ -139,10 +148,11 @@ commits.
   `supported_features`). That noise in the diffs is normal.
 - HACS-managed `custom_components/` and `www/community/` are tracked by default: large,
   but a restore then needs no re-download. Ignore them if the repository size matters.
-- The check reads every staged file, so a file that does not parse blocks the commit even
-  when Claude's change did not touch it — typically a UI edit, or a file HA or an add-on
-  was half-way through writing. Retry a moment later, fix the file, or leave it out with
-  `git restore --staged <file>`; `--no-verify` only when the user says so.
+- The check reads the staged content of every staged file, so a file that does not parse
+  blocks the commit even when Claude's change did not touch it — typically a UI edit, or
+  a file staged while HA or an add-on was half-way through writing it. Fix it or stage it
+  again, or leave it out with `git restore --staged <file>`; `--no-verify` only when the
+  user says so.
 
 ## Restoring from the repository
 

@@ -10,15 +10,19 @@ All notable changes to this project will be documented in this file.
   `.gitignore` template (`.storage/` and `.claudecode/` are whitelists, so every new
   integration's token store stays out without anyone listing it; all storage dashboards
   via `lovelace.*`; backup-copy patterns placed last so they win over the whitelist),
+  token caches, key files, service-account JSON and Zigbee2MQTT data ignored by name),
   `git_backup.sh` (safety-net commit + push via `shell_command`, which runs in the HA
-  Core container) and the setup `README.md` Claude follows (repo-local identity because
+  Core container; a failed add or commit exits non-zero instead of reporting success) and the setup `README.md` Claude follows (repo-local identity because
   `~/.gitconfig` is ephemeral, review before the first commit, restore caveats).
   Nothing is installed automatically. New tests: `tests/test_git_kit.py`,
   `tests/test_ha_ws.py`.
 - **Pre-commit hook** `/usr/local/share/claudecode/git-hooks/pre-commit`, enabled with
   `git config core.hooksPath /usr/local/share/claudecode/git-hooks`: refuses commits that
-  include credentials, leave a storage dashboard git-ignored, or stage YAML/JSON/Python/
-  dashboard-JS that does not parse. It is a real git hook, so it gates every commit made
+  include credentials (known paths, plus any tracked file containing a private key), leave
+  a storage dashboard git-ignored, or stage YAML/JSON/Python/dashboard-JS that does not
+  parse. It checks the staged content (not the working-tree copy) with one `python3` and
+  one `node` process, handles non-ASCII paths, accepts JSON-with-comments outside
+  `.storage/`, and only parses `<script>` blocks that are JavaScript. It is a real git hook, so it gates every commit made
   in the add-on (Claude's and the terminal's); it lives under `/usr/local/` because the
   AppArmor profile does not allow executing anything in `/homeassistant`.
 - **`CLAUDE.md`: "Git-backed configuration"**: when `/homeassistant` is a repository,
@@ -37,7 +41,8 @@ All notable changes to this project will be documented in this file.
   stdin; one reply per line). Stops at the first failed command (`--keep-going` runs the
   rest); exit 1 = a command failed, 2 = usage/connection/auth error, reported in one line.
   Keeps bytes that arrive together with the handshake (HA's greeting can share a read
-  with the HTTP 101 through the Supervisor proxy); `--timeout` per reply, default 300 s.
+  with the HTTP 101 through the Supervisor proxy); `--timeout` is a deadline per command
+  (default 300 s) that heartbeat pings and events do not extend.
 
 ## [1.2.65-con.19] - 2026-09-17
 

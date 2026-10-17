@@ -8,7 +8,7 @@ Usage:
 
 Options:
   --keep-going      run the remaining commands after one fails (default: stop there)
-  --timeout SECS    how long to wait for each reply (default 300)
+  --timeout SECS    how long to wait for each command's reply (default 300)
 
 Each command is a message object without "id" (ids are assigned in order). Prints one
 JSON reply per command, one per line. Exit 0 = every command succeeded, 1 = a command
@@ -26,6 +26,7 @@ import os
 import socket
 import struct
 import sys
+import time
 
 HOST = "supervisor"
 PORT = 80
@@ -47,6 +48,7 @@ class Conn:
         # same read as the HTTP 101 response; dropping them leaves the client waiting for
         # a greeting that has already been sent.
         self.buf = b""
+        self.deadline = None  # time.monotonic() value by which the current reply is due
         key = base64.b64encode(os.urandom(16)).decode()
         self.s.sendall((
             f"GET {PATH} HTTP/1.1\r\n"
@@ -82,6 +84,13 @@ class Conn:
 
     def recv_exact(self, n):
         while len(self.buf) < n:
+            if self.deadline is not None:
+                # A deadline, not an idle timeout: HA's heartbeat pings and subscription
+                # events would otherwise restart the clock on every frame.
+                left = self.deadline - time.monotonic()
+                if left <= 0:
+                    raise socket.timeout()
+                self.s.settimeout(left)
             chunk = self.s.recv(max(65536, n - len(self.buf)))
             if not chunk:
                 raise Fail("connection closed by Home Assistant")
@@ -163,9 +172,9 @@ def run(argv):
     msg = c.recv()
     if msg.get("type") != "auth_ok":
         raise Fail(f"authentication failed: {msg.get('message', msg.get('type'))}")
-    c.s.settimeout(timeout)
     ok = True
     for mid, cmd in enumerate(cmds, start=1):
+        c.deadline = time.monotonic() + timeout
         c.send(json.dumps(dict(cmd, id=mid)).encode())
         while True:
             try:
