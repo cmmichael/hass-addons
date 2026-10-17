@@ -1,0 +1,250 @@
+#!/bin/sh
+# Pre-commit hook for a git-backed Home Assistant config directory. Shipped by the Claude
+# Code add-on (setup: /usr/share/claudecode/git/README.md). Enable it once per repository:
+#
+#   git -C /homeassistant config core.hooksPath /usr/local/share/claudecode/git-hooks
+#
+# It lives here, not in the config directory, because the add-on's AppArmor profile only
+# lets it execute files under /usr/{bin,lib,local}/ — a hook inside /homeassistant fails
+# every commit with "cannot exec ... Permission denied". Every commit made in this add-on
+# (Claude's or yours at the terminal) runs it. The HA Core container has no such path, so
+# git there skips it: git_backup.sh commits rely on the .gitignore alone.
+#
+# It checks what is being committed — the staged content, not the working-tree copy:
+#
+#   1. credentials       secrets.yaml, .storage auth/token stores, the jobs package
+#                        token, Claude's own credentials, key files, and any tracked file
+#                        that contains a private key: refused if in the index
+#   2. dashboards        every storage dashboard's .storage/lovelace.<id> must not be
+#                        git-ignored (a .storage whitelist silently drops new dashboards)
+#   3. syntax            staged *.yaml/*.yml load (HA tags accepted), .storage/* is strict
+#                        JSON, other *.json parse (comments and trailing commas allowed),
+#                        *.py compiles, www/ *.js and inline JavaScript <script> blocks
+#                        parse (node)
+#
+# custom_components/ and www/community/ (HACS-managed) are skipped for syntax and for the
+# private-key scan. Exit 0 = fine, 1 = refuse the commit. Run by hand (after `git add`)
+# with `sh /usr/local/share/claudecode/git-hooks/pre-commit` from inside the repository.
+fail=0
+top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "pre-commit: not inside a git repository"; exit 1; }
+cd "$top" || exit 1
+
+have() { command -v "$1" >/dev/null 2>&1; }
+# quotePath=false: git otherwise prints non-ASCII paths C-quoted ("caf\303\251.yaml"),
+# which match neither the patterns below nor a file on disk.
+g() { git -c core.quotePath=false "$@"; }
+
+# --- 1. credentials -------------------------------------------------------------------
+# Paths that hold tokens, keys or password hashes. A whitelist .gitignore keeps them out;
+# this is the backstop for a blacklist one, a `git add -f`, or a file tracked before the
+# .gitignore existed (ignoring a tracked file does nothing — `git rm --cached` it).
+secret_hits=$(g ls-files | grep -E \
+  -e '(^|/)secrets\.yaml$' \
+  -e '^\.cloud/' \
+  -e '^\.storage/(auth|auth_provider\..*|auth_module\..*|core\.config_entries|application_credentials|cloud|mobile_app|onboarding)$' \
+  -e '^claudecode_jobs\.yaml$' \
+  -e '^\.claudecode/(\.credentials\.json.*|\.claude\.json.*|gh/.*|projects/.*|sessions/.*|session-env/.*|history\.jsonl|jobs/(state|logs)/.*|jobs/_notify\.yaml)$' \
+  -e '(^|/)zigbee\.db' \
+  -e '(^|/)home-assistant_v2\.db' \
+  -e '(^|/)coordinator_backup\.json$' \
+  -e '(^|/)SERVICE_ACCOUNT\.json$' \
+  -e '\.(pem|key|p12|pfx|jks|ppk|kdbx|token)$' )
+# Key material under any name (a Google service-account JSON, an SSH key pasted into YAML).
+key_hits=$(g grep --cached -l -I -E -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -- . \
+  ':(exclude)custom_components' ':(exclude)www/community' 2>/dev/null)
+secret_hits=$(printf '%s\n%s\n' "$secret_hits" "$key_hits" | sort -u | sed '/^$/d')
+if [ -n "$secret_hits" ]; then
+  echo "pre-commit: these files hold credentials and must never be committed:"
+  printf '%s\n' "$secret_hits" | sed 's/^/  /'
+  echo "  ignore them in .gitignore; if already tracked: git rm --cached <file>"
+  echo "  (and rotate the credential if the repository was ever pushed)"
+  fail=1
+fi
+
+# --- staged content -------------------------------------------------------------------
+# The files to syntax-check are exported from the index, so the check sees exactly what
+# the commit will contain: not a later working-tree fix, not a file HA is half-way through
+# rewriting. One python3 and one node process then check all of them.
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/pre-commit.XXXXXX") || { echo "pre-commit: cannot create a temp dir"; exit 1; }
+trap 'rm -rf "$tmp"' EXIT
+g diff --cached --name-only -z --diff-filter=ACMR -- \
+    '*.yaml' '*.yml' '*.json' '*.py' '.storage/*' 'www/*.html' 'www/*.js' \
+    ':(exclude)custom_components/*' ':(exclude)www/community/*' \
+  | git checkout-index -z --stdin --prefix="$tmp/" \
+  || { echo "pre-commit: could not read the staged files"; fail=1; }
+
+# --- 2. storage dashboards + 3. syntax (YAML, JSON, Python) ------------------------------
+# Restoring a repo where lovelace_dashboards is tracked but a dashboard's own config is
+# ignored brings that dashboard back as an empty shell.
+if have python3; then
+  python3 - "$tmp" <<'PY' || fail=1
+import json, os, re, subprocess, sys
+
+tmp = sys.argv[1]
+bad = False
+
+
+def refuse(msg, detail=""):
+    global bad
+    bad = True
+    if detail:
+        print("  " + str(detail).replace(tmp + os.sep, "").replace("\n", "\n  "))
+    print("pre-commit: " + msg)
+
+
+def strip_jsonc(s):
+    """Drop // and /* */ comments and trailing commas (VS Code, tsconfig, devcontainer)."""
+    out, i, n, in_str = [], 0, len(s), False
+    while i < n:
+        c = s[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(s[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif s.startswith("//", i):
+            j = s.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        elif s.startswith("/*", i):
+            j = s.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
+# 2. dashboards. The registry and the ignore rules are read from the working tree.
+REG = ".storage/lovelace_dashboards"
+if os.path.isfile(REG):
+    try:
+        with open(REG, encoding="utf-8") as fh:
+            items = json.load(fh)["data"]["items"]
+        ids = [d["id"] for d in items
+               if isinstance(d, dict) and d.get("id") and d.get("mode", "storage") == "storage"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        refuse(f"cannot read {REG}, so the ignored-dashboard check did not run "
+               "(if HA is writing it, retry)", f"{type(e).__name__}: {e}")
+    else:
+        for i in ids:
+            f = f".storage/lovelace.{i}"
+            if os.path.isfile(f) and subprocess.run(["git", "check-ignore", "-q", f]).returncode == 0:
+                refuse(f'dashboard config {f} is git-ignored - add "!/{f}" '
+                       '(or "!/.storage/lovelace.*") to .gitignore')
+
+# 3. syntax
+try:
+    import yaml
+
+    class Loader(yaml.SafeLoader):
+        pass
+    Loader.add_multi_constructor("!", lambda loader, suffix, node: None)  # !secret, !include*, !input, ...
+except ImportError:
+    yaml = None
+    print("pre-commit: PyYAML is not installed - YAML files were not checked")
+
+for root, _dirs, files in os.walk(tmp):
+    for name in sorted(files):
+        path = os.path.join(root, name)
+        rel = os.path.relpath(path, tmp).replace(os.sep, "/")
+        if os.path.islink(path):
+            continue
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+            storage = rel.startswith(".storage/")
+            if rel.endswith((".yaml", ".yml")):
+                if yaml:
+                    try:
+                        yaml.load(raw.decode("utf-8-sig"), Loader=Loader)
+                    except yaml.YAMLError as e:
+                        refuse(f"YAML does not load: {rel}", e)
+            elif storage or rel.endswith(".json"):
+                # HA's own files are strict JSON; elsewhere a tool's JSON-with-comments
+                # (and a BOM) is valid for its consumer.
+                text = raw.decode("utf-8" if storage else "utf-8-sig")
+                try:
+                    json.loads(text)
+                except ValueError as e:
+                    try:
+                        if storage:
+                            raise
+                        json.loads(strip_jsonc(text))
+                    except ValueError:
+                        refuse(f"invalid JSON: {rel}", e)
+            elif rel.endswith(".py"):
+                try:
+                    compile(raw, rel, "exec")
+                except (SyntaxError, ValueError) as e:
+                    refuse(f"Python does not compile: {rel}", e)
+        except UnicodeDecodeError as e:
+            refuse(f"not valid UTF-8: {rel}", e)
+
+sys.exit(1 if bad else 0)
+PY
+else
+  echo "pre-commit: python3 is missing - dashboards, YAML, JSON and Python were not checked"
+fi
+
+# --- 3. syntax (dashboard JavaScript) -------------------------------------------------
+if [ -d "$tmp/www" ]; then
+  if have node; then
+    node - "$tmp" <<'JS' || fail=1
+const fs = require("fs"), path = require("path"), vm = require("vm");
+const { spawnSync } = require("child_process");
+const tmp = process.argv[2];
+let bad = false;
+const refuse = (msg, detail) => { bad = true; if (detail) console.log("  " + detail); console.log("pre-commit: " + msg); };
+const JS_TYPES = /^(text|application)\/(x-)?(javascript|ecmascript|jscript)$/i;
+const JSON_TYPES = /^(importmap|speculationrules|application\/(ld\+)?json)$/i;
+
+function walk(dir) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name), rel = path.relative(tmp, p).split(path.sep).join("/");
+    if (e.isDirectory()) walk(p);
+    else if (!e.isFile()) continue;
+    else if (rel.endsWith(".js")) {
+      try { new vm.Script(fs.readFileSync(p, "utf8"), { filename: rel }); }
+      catch (err) {
+        // import/export and top-level await are not script syntax: let node decide.
+        const r = spawnSync(process.execPath, ["--check", p], { encoding: "utf8" });
+        if (r.status !== 0) refuse(`JS does not parse: ${rel}`, (r.stderr || String(err)).split(tmp + path.sep).join("").trim().split("\n").slice(0, 6).join("\n  "));
+      }
+    } else if (rel.endsWith(".html")) {
+      const html = fs.readFileSync(p, "utf8");
+      const blocks = [...html.matchAll(/<script\b(?![^>]*\bsrc\s*=)([^>]*)>([\s\S]*?)<\/script\s*>/gi)];
+      const errs = [];
+      blocks.forEach((m, i) => {
+        const t = (/\btype\s*=\s*["']?([^"'\s>]+)/i.exec(m[1]) || [])[1];
+        try {
+          if (!t || JS_TYPES.test(t)) new Function(m[2]);
+          else if (JSON_TYPES.test(t)) JSON.parse(m[2]);
+          // module (import/export) and non-JavaScript types (shaders, templates): not checked
+        } catch (err) { errs.push(`script #${i}: ${err.message}`); }
+      });
+      if (errs.length) refuse(`inline script does not parse: ${rel}`, errs.join("\n  "));
+    }
+  }
+}
+walk(path.join(tmp, "www"));
+process.exit(bad ? 1 : 0);
+JS
+  else
+    echo "pre-commit: node is missing - dashboard JavaScript was not checked"
+  fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-commit: commit refused - fix the file(s) above and stage them again."
+  echo "  To commit without a file: git restore --staged <file>"
+  exit 1
+fi
+exit 0
