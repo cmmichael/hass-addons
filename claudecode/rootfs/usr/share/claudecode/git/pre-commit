@@ -1,0 +1,118 @@
+#!/bin/sh
+# Pre-commit check for a git-backed Home Assistant config directory.
+# Shipped by the Claude Code add-on: /usr/share/claudecode/git/pre-commit (see README.md
+# next to it). Run it with `sh`, from anywhere inside the repository:
+#
+#   sh /usr/share/claudecode/git/pre-commit
+#
+# It is deliberately NOT a git hook. /homeassistant is mounted noexec for this add-on
+# (AppArmor), so pointing core.hooksPath at a script in the config dir makes EVERY commit
+# fail with "cannot exec ... Permission denied". Instead claude-precommit.sh (next to this
+# file) runs it as a Claude Code PreToolUse hook before each `git commit` Claude issues.
+#
+# It checks everything the next `git add -A && git commit` would include — staged,
+# unstaged and untracked-but-not-ignored files — because Claude stages and commits in one
+# command, so at hook time nothing is staged yet.
+#
+#   1. credentials       secrets.yaml, .storage auth/token stores, the jobs package
+#                        token, Claude's own credentials: refused if tracked or about to be
+#   2. dashboards        every storage dashboard's .storage/lovelace.<id> must not be
+#                        git-ignored (a .storage whitelist silently drops new dashboards)
+#   3. syntax            *.yaml/*.yml load (HA tags accepted), *.json and .storage/* parse,
+#                        *.py compiles, www/ *.js and inline <script> blocks parse (node)
+#
+# custom_components/ and www/community/ (HACS-managed) are skipped for syntax.
+# Exit 0 = fine, 1 = refuse the commit.
+fail=0
+top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "pre-commit: not inside a git repository"; exit 1; }
+cd "$top" || exit 1
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+changed=$( { git diff --cached --name-only --diff-filter=ACMR; git diff --name-only --diff-filter=ACMR; git ls-files --others --exclude-standard; } | sort -u )
+would_track=$( { git ls-files; git ls-files --others --exclude-standard; } | sort -u )
+
+# --- 1. credentials -------------------------------------------------------------------
+# Paths that hold tokens, keys or password hashes. A whitelist .gitignore keeps them out;
+# this is the backstop for a blacklist one, a `git add -f`, or a file tracked before the
+# .gitignore existed (ignoring a tracked file does nothing — `git rm --cached` it).
+secret_hits=$(printf '%s\n' "$would_track" | grep -E \
+  -e '(^|/)secrets\.yaml$' \
+  -e '^\.cloud/' \
+  -e '^\.storage/(auth|auth_provider\..*|auth_module\..*|core\.config_entries|application_credentials|cloud|mobile_app|onboarding)$' \
+  -e '^claudecode_jobs\.yaml$' \
+  -e '^\.claudecode/(\.credentials\.json.*|\.claude\.json.*|gh/.*|projects/.*|sessions/.*|session-env/.*|history\.jsonl|jobs/(state|logs)/.*|jobs/_notify\.yaml)$' \
+  -e '(^|/)zigbee\.db' \
+  -e '(^|/)home-assistant_v2\.db' \
+  -e '\.(pem|key|p12|pfx)$' )
+if [ -n "$secret_hits" ]; then
+  echo "pre-commit: these files hold credentials and must never be committed:"
+  printf '  %s\n' $secret_hits
+  echo "  ignore them in .gitignore; if already tracked: git rm --cached <file>"
+  echo "  (and rotate the credential if the repository was ever pushed)"
+  fail=1
+fi
+
+# --- 2. storage dashboards ------------------------------------------------------------
+# Restoring a repo where lovelace_dashboards is tracked but a dashboard's own config is
+# ignored brings that dashboard back as an empty shell.
+if have python3 && [ -f .storage/lovelace_dashboards ]; then
+  for id in $(python3 -c 'import json; [print(d["id"]) for d in json.load(open(".storage/lovelace_dashboards"))["data"]["items"] if d.get("mode", "storage") == "storage"]' 2>/dev/null); do
+    f=".storage/lovelace.$id"
+    if [ -f "$f" ] && git check-ignore -q "$f"; then
+      echo "pre-commit: dashboard config $f is git-ignored - add \"!/$f\" (or \"!/.storage/lovelace.*\") to .gitignore"
+      fail=1
+    fi
+  done
+fi
+
+# --- 3. syntax ------------------------------------------------------------------------
+# The loop runs in a pipeline subshell, so failures are reported as FAIL lines.
+syntax_out=$(printf '%s\n' "$changed" | while IFS= read -r f; do
+  [ -n "$f" ] && [ -f "$f" ] || continue
+  case "$f" in
+    custom_components/*|www/community/*) continue ;;
+  esac
+  case "$f" in
+    www/*.html)
+      have node || continue
+      node -e '
+        const fs=require("fs"); const h=fs.readFileSync(process.argv[1],"utf8");
+        const m=[...h.matchAll(/<script(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/g)];
+        m.forEach((x,i)=>{ const json=/type=["\x27]?(importmap|application\/(ld\+)?json)/.test(x[1]);
+          const mod=/type=["\x27]?module/.test(x[1]);
+          if (mod) return;  // ES modules (import/export) cannot be checked with new Function
+          try{ json ? JSON.parse(x[2]) : new Function(x[2]); }catch(e){ console.error(`  script #${i}: ${e.message}`); process.exitCode=1; } });
+      ' "$f" || { echo "pre-commit: inline script does not parse: $f"; echo FAIL; } ;;
+    www/*.js)
+      have node || continue
+      node --check "$f" || { echo "pre-commit: JS does not parse: $f"; echo FAIL; } ;;
+    *.yaml|*.yml)
+      have python3 || continue
+      python3 - "$f" <<'PY' || { echo "pre-commit: YAML does not load: $f"; echo FAIL; }
+import sys, yaml
+class L(yaml.SafeLoader): pass
+L.add_multi_constructor("!", lambda loader, suffix, node: None)   # !secret, !include*, !input, ...
+try:
+    with open(sys.argv[1]) as fh:
+        yaml.load(fh, Loader=L)
+except yaml.YAMLError as e:
+    print("  " + str(e).replace("\n", "\n  ")); sys.exit(1)
+PY
+      ;;
+    *.json|.storage/*)
+      have python3 || continue
+      python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$f" 2>/dev/null || { echo "pre-commit: invalid JSON: $f"; echo FAIL; } ;;
+    *.py)
+      have python3 || continue
+      python3 -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' "$f" || { echo "pre-commit: Python does not compile: $f"; echo FAIL; } ;;
+  esac
+done 2>&1)
+[ -n "$syntax_out" ] && printf '%s\n' "$syntax_out" | grep -v '^FAIL$'
+printf '%s\n' "$syntax_out" | grep -qx FAIL && fail=1
+
+if [ "$fail" -ne 0 ]; then
+  echo "pre-commit: commit refused - fix the file(s) above."
+  exit 1
+fi
+exit 0

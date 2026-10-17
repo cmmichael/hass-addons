@@ -125,6 +125,30 @@ file reads exist only through the job's declared `paths:` (under /homeassistant,
 it. Put the load-bearing number in the job's headline. Do not use `claude-job run` as a
 way to "do the work" of this conversation — it is for scheduled or one-off headless runs.
 
+## Git-backed configuration
+
+Check once per session: `git -C /homeassistant rev-parse --is-inside-work-tree`.
+
+**If `/homeassistant` is a git repository**, every config change goes through it:
+
+- Before the first change of the session, commit whatever changed outside the session
+  (UI edits, HACS updates, registry churn) as `Pre-session snapshot`, and push if a
+  remote is configured.
+- After each logical change, commit (and push) with a message saying what changed and
+  why. One change per commit — don't batch unrelated changes.
+- The history is the backup: no `.bak` copies next to edited files.
+- Never `git add -f` an ignored file and never commit with `--no-verify` unless the user
+  asks. If something valuable is ignored, extend the `.gitignore` whitelist deliberately.
+- Credentials go in `secrets.yaml` via `!secret`, never in a tracked file.
+  `claudecode_jobs.yaml` (the add-on's token-bearing package) must never be committed.
+- Git hooks cannot run from `/homeassistant` (noexec mount — `core.hooksPath` pointing
+  there fails every commit). The commit check is a Claude Code hook instead:
+  `/usr/share/claudecode/git/claude-precommit.sh`.
+
+**If it is not a repository** and the user asks for a config change, offer once to set
+it up — don't do it unasked. The steps, a whitelist `.gitignore`, the commit check and a
+safety-net backup script are in `/usr/share/claudecode/git/` (start with its README.md).
+
 ## User instructions
 
 The add-on regenerates this file (`~/.claude/CLAUDE.md`) on every start, so

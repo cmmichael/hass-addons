@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.20] - 2026-10-17
+
+### Added
+- **Git-backed config kit** in `/usr/share/claudecode/git/`: a whitelist-style
+  `.gitignore` template (`.storage/` and `.claudecode/` are whitelists, so every new
+  integration's token store stays out without anyone listing it; all storage dashboards
+  via `lovelace.*`; backup-copy patterns placed last so they win over the whitelist),
+  `pre-commit` (refuses credentials that are tracked or about to be, git-ignored storage
+  dashboards, and YAML/JSON/Python/dashboard-JS that does not parse; checks staged,
+  unstaged and untracked files because Claude stages and commits in one command),
+  `claude-precommit.sh` (runs it as a Claude Code PreToolUse hook: real git hooks cannot
+  run from the noexec `/homeassistant` mount, and `core.hooksPath` there fails every
+  commit; only commits that target the config repo are gated), `git_backup.sh`
+  (safety-net commit + push via `shell_command`, which runs in the HA Core container) and
+  a step-by-step `README.md` (repo-local identity because `~/.gitconfig` is ephemeral, a
+  token scoped to the one repository, review before the first commit, restore caveats).
+  Nothing is installed automatically. New tests: `tests/test_git_kit.py`.
+- **`CLAUDE.md`: "Git-backed configuration"**: when `/homeassistant` is a repository,
+  Claude snapshots outside changes before its first edit, commits each logical change
+  with a descriptive message, keeps no `.bak` copies and never force-adds or skips the
+  check; when it is not, Claude offers the setup once instead of doing it unasked.
+
 ## [1.2.65-con.19] - 2026-09-17
 
 ### Added

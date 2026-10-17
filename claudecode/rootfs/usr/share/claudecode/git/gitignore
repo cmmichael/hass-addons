@@ -1,0 +1,118 @@
+# .gitignore for a Home Assistant config directory (/homeassistant = HA Core's /config).
+# Shipped by the Claude Code add-on: /usr/share/claudecode/git/gitignore — see README.md
+# next to it. Copy it to /homeassistant/.gitignore and adapt it; the add-on never edits
+# your copy.
+#
+# The rule: anything that can hold a credential is ignored, and the two directories full
+# of them (.storage/ and .claudecode/) are WHITELISTS. A blacklist ("ignore the token
+# files") goes wrong silently: every new integration drops its OAuth token into .storage/
+# under a name nobody listed. A whitelist goes wrong loudly: a new file is untracked until
+# someone adds it (the pre-commit check next to this file catches the one case where that
+# hurts: storage dashboards).
+#
+# ORDER MATTERS. git applies the LAST matching pattern, so the backup-file patterns at the
+# bottom must stay below the whitelists, or ".storage/lovelace.<id>.bak" is re-included
+# by "!.storage/lovelace.*".
+
+# --- Credentials: never commit -------------------------------------------------------
+secrets.yaml
+.cloud/
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.ssh/
+# Add here every file that holds a credential inline instead of through !secret — e.g. the
+# YAML config some add-ons keep in the config directory.
+
+# The Claude Code add-on's generated jobs package carries the endpoint bearer token. The
+# add-on also puts it in .git/info/exclude on every start; this line covers clones.
+/claudecode_jobs.yaml
+
+# --- Claude Code add-on (~/.claude = .claudecode/) ----------------------------------
+# OAuth credentials, session transcripts, memory, gh login, job state and logs (job
+# notify maps can hold webhook headers). Whitelist only what you write by hand.
+/.claudecode/*
+!/.claudecode/CLAUDE.user.md
+!/.claudecode/jobs/
+/.claudecode/jobs/*
+!/.claudecode/jobs/*.md
+!/.claudecode/skills/
+# Claude Code's per-project directory: keep shared settings and skills, not the rest
+# (settings.local.json, worktrees, checkpoints, scheduled-task state).
+/.claude/*
+!/.claude/settings.json
+!/.claude/skills/
+!/.claude/agents/
+!/.claude/commands/
+
+# --- .storage: whitelist only safe, valuable files ------------------------------------
+# Everything else in .storage holds secrets or churn: auth / auth_provider.* (users,
+# password hashes, refresh tokens), core.config_entries + application_credentials (every
+# integration's tokens and API keys), cloud, mobile_app (webhook secrets), onboarding,
+# the token stores many integrations keep under their own name, hacs.*, traces,
+# restore_state. To track something new, add a "!" line — never `git add -f`.
+/.storage/*
+# Dashboards. The wildcard covers every storage dashboard, so a new one is tracked the day
+# it is created (an explicit list silently missed new dashboards). Dashboard configs can
+# carry URLs with tokens (iframe / webpage cards) — keep those in a private repo.
+!/.storage/lovelace
+!/.storage/lovelace.*
+!/.storage/lovelace_dashboards
+!/.storage/lovelace_resources
+# Registries: entity ids, names, areas. device_registry/entity_registry churn on every
+# start (modified_at, supported_features) — expected noise in the diffs.
+!/.storage/core.area_registry
+!/.storage/core.floor_registry
+!/.storage/core.label_registry
+!/.storage/core.category_registry
+!/.storage/core.device_registry
+!/.storage/core.entity_registry
+# core.config = home location, units, time zone; zone = your saved zones.
+!/.storage/core.config
+!/.storage/zone
+!/.storage/person
+!/.storage/homeassistant.exposed_entities
+!/.storage/energy
+# UI-created helpers
+!/.storage/counter
+!/.storage/input_boolean
+!/.storage/input_button
+!/.storage/input_datetime
+!/.storage/input_number
+!/.storage/input_select
+!/.storage/input_text
+!/.storage/schedule
+!/.storage/timer
+!/.storage/tag
+
+# --- Databases, logs, caches, runtime state ------------------------------------------
+# *.db* also covers zigbee.db (ZHA: holds the Zigbee network key).
+*.db
+*.db-*
+*.sqlite*
+*.log
+*.log.*
+home-assistant.log.fault
+.ha_run.lock
+.cache/
+deps/
+tts/
+backups/
+__pycache__/
+*.pyc
+node_modules/
+# ESPHome build cache (configs and esphome/secrets.yaml are handled above)
+.esphome/
+
+# --- Backup copies of files (git history replaces them) ------------------------------
+# Keep this block LAST: it must win over the .storage whitelist above.
+*.bak
+*.bak?
+*.bak-*
+*.session-bak
+*.old
+*.orig
+*~
