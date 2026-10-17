@@ -1,6 +1,6 @@
-"""The git-backed config kit in rootfs/usr/share/claudecode/git: the .gitignore template keeps
-credentials out and dashboards in, pre-commit refuses what it documents, and the Claude hook only
-gates commits that target the config repo."""
+"""The git-backed config kit (rootfs/usr/share/claudecode/git + the pre-commit hook in
+rootfs/usr/local/share/claudecode/git-hooks): the .gitignore template keeps credentials out and
+dashboards in, and the hook refuses what it documents — run by hand and as a real git hook."""
 import json
 import os
 import shutil
@@ -12,6 +12,7 @@ from pathlib import Path
 from testlib import SHARE_DIR
 
 KIT = SHARE_DIR / "git"
+HOOKS = SHARE_DIR.parents[1] / "local/share/claudecode/git-hooks"
 HAVE_GIT = shutil.which("git") is not None
 
 
@@ -38,8 +39,10 @@ class KitRepo(unittest.TestCase):
     def ignored(self, rel):
         return git(self.repo, "check-ignore", "-q", "--no-index", rel, check=False).returncode == 0
 
-    def precommit(self):
-        return subprocess.run(["sh", str(KIT / "pre-commit")], cwd=self.repo, capture_output=True, text=True)
+    def precommit(self, stage=True):
+        if stage:
+            git(self.repo, "add", "-A")
+        return subprocess.run(["sh", str(HOOKS / "pre-commit")], cwd=self.repo, capture_output=True, text=True)
 
 
 class TestGitignoreTemplate(KitRepo):
@@ -80,7 +83,7 @@ class TestPreCommit(KitRepo):
     def test_force_added_secret_is_refused(self):
         write(self.repo, "secrets.yaml", "k: v\n")
         git(self.repo, "add", "-f", "secrets.yaml")
-        r = self.precommit()
+        r = self.precommit(stage=False)
         self.assertEqual(r.returncode, 1)
         self.assertIn("secrets.yaml", r.stdout)
 
@@ -115,28 +118,38 @@ class TestPreCommit(KitRepo):
         self.assertEqual(r.returncode, 0, r.stdout)
 
 
-class TestClaudeHook(KitRepo):
-    def hook(self, command, cwd):
-        env = dict(os.environ, HA_CONFIG_REPO=str(self.repo))
-        return subprocess.run(["sh", str(KIT / "claude-precommit.sh")], input=json.dumps(
-            {"tool_input": {"command": command}, "cwd": cwd}), capture_output=True, text=True, env=env)
-
+class TestGitHook(KitRepo):
+    """core.hooksPath -> the hooks dir. Copied to a temp dir first: the copy is what gets
+    executed, so the suite also runs where the checkout itself is not exec-allowed."""
     def setUp(self):
         super().setUp()
+        hooks = Path(tempfile.mkdtemp(prefix="gitkit-hooks-"))
+        self.addCleanup(shutil.rmtree, hooks, True)
+        shutil.copy(HOOKS / "pre-commit", hooks / "pre-commit")
+        os.chmod(hooks / "pre-commit", 0o755)
+        git(self.repo, "config", "core.hooksPath", str(hooks))
+        write(self.repo, "configuration.yaml", "homeassistant:\n")
+
+    def commit(self):
+        git(self.repo, "add", "-A")
+        return git(self.repo, "commit", "-q", "-m", "x", check=False)
+
+    def test_clean_commit_goes_through(self):
+        r = self.commit()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_broken_file_blocks_the_commit(self):
         write(self.repo, "automations.yaml", "- id: a\n  alias: [unclosed\n")
+        r = self.commit()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("YAML does not load: automations.yaml", r.stdout + r.stderr)
+        self.assertEqual(git(self.repo, "rev-list", "--all").stdout, "")
 
-    def test_blocks_commit_in_config_repo(self):
-        r = self.hook("git add -A && git commit -m x", str(self.repo))
-        self.assertEqual(r.returncode, 2)
-        self.assertIn("automations.yaml", r.stderr)
-
-    def test_blocks_commit_naming_config_repo(self):
-        self.assertEqual(self.hook(f"git -C {self.repo} commit -m x", "/somewhere/else").returncode, 2)
-
-    def test_other_repos_and_commands_pass(self):
-        self.assertEqual(self.hook("git commit -m x", "/somewhere/else").returncode, 0)
-        self.assertEqual(self.hook("git status", str(self.repo)).returncode, 0)
-        self.assertEqual(self.hook("git commit --no-verify -m x", str(self.repo)).returncode, 0)
+    def test_unstaged_broken_file_does_not_block(self):
+        write(self.repo, "automations.yaml", "- id: a\n  alias: [unclosed\n")
+        git(self.repo, "add", "configuration.yaml")
+        r = git(self.repo, "commit", "-q", "-m", "x", check=False)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":

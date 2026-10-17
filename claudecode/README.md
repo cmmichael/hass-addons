@@ -27,7 +27,7 @@ claude "Why isn't my motion sensor automation working?"
 - **Customizable Theme**: Choose between dark and light terminal themes
 - **Multi-Architecture**: Supports amd64, aarch64, armv7, armhf, and i386
 - **Secure Authentication**: Claude Code handles its own authentication securely
-- **Git-backed config kit**: a whitelist `.gitignore`, a commit check and a backup script for keeping `/homeassistant` in git — see [Version-controlling your configuration](#version-controlling-your-configuration-git)
+- **Git-backed config**: create an empty private repository and ask Claude to set it up — see [Version-controlling your configuration](#version-controlling-your-configuration-git)
 - **Scheduled jobs**: Unattended, read-only Claude runs (health checks, reports) that Home Assistant triggers on a schedule and that report back as entities and notifications — see [Scheduled jobs](#scheduled-jobs-claude-jobs)
 
 ## Setup
@@ -205,28 +205,23 @@ conventions, frequently-referenced entity IDs, or reminders about your setup.
 
 ## Version-controlling your configuration (git)
 
-Keeping `/homeassistant` in a (private) git repository gives every change Claude makes a
-diff, a rollback and an off-box copy. The add-on does not set this up by itself; it ships
-the pieces in `/usr/share/claudecode/git/`, and its `CLAUDE.md` tells Claude to offer
-the setup once if the config directory is not a repository yet. Ask Claude to "set up git
-for my config" or follow `/usr/share/claudecode/git/README.md` by hand:
+Keeping `/homeassistant` in a private git repository gives every change Claude makes a
+diff, a rollback and an off-box copy. To set it up:
 
-- `gitignore` — a whitelist-style template. `.storage/` and `.claudecode/` are full of
-  OAuth tokens, password hashes and session transcripts, so only known-safe files there
-  (dashboards, registries, UI helpers) are tracked; secrets, databases, logs and backup
-  copies are ignored.
-- `pre-commit` + `claude-precommit.sh` — a check that Claude runs before each of its
-  commits (wired as a Claude Code hook): refuses credentials, storage dashboards that
-  are git-ignored, and YAML/JSON/Python/dashboard-JS files that do not parse. It is not
-  a git hook because `/homeassistant` is mounted noexec for the add-on — git cannot run
-  hooks from there.
-- `git_backup.sh` — a commit + push for changes made outside Claude sessions, run by
-  Home Assistant through `shell_command`.
+1. Create an **empty, private** repository on GitHub (or any git host).
+2. Create a **fine-grained personal access token** for that one repository, with
+   *Contents: read and write*.
+3. Ask Claude: *"Set up git backup of my config to &lt;repository URL&gt;"*, and give it
+   the token when it asks.
 
-Once `/homeassistant` is a repository, Claude snapshots outside changes at the start of a
-session and commits each change with a descriptive message. To change that workflow, put
-your own rules in `CLAUDE.user.md`. The jobs package token is kept out of git
-automatically — see [docs/JOBS.md](docs/JOBS.md#git-backed-config-directories).
+Claude does the rest from `/usr/share/claudecode/git/README.md`: a whitelist-style
+`.gitignore` (`.storage/` and `.claudecode/` are full of tokens and password hashes, so
+only known-safe files there are tracked), a pre-commit hook that refuses credentials,
+git-ignored storage dashboards and files that do not parse. It shows you what the first
+commit would contain before making it. After that, Claude commits each change it makes
+with a descriptive message; an optional weekly `shell_command` backup catches UI edits.
+Put your own rules for that workflow in `CLAUDE.user.md`. The jobs package token is kept
+out of git automatically — see [docs/JOBS.md](docs/JOBS.md#git-backed-config-directories).
 
 `ha-ws` (in the terminal) sends commands to Home Assistant's WebSocket API, for changes
 that must not be made by editing `.storage/` while HA runs:

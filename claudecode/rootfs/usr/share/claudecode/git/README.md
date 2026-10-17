@@ -7,14 +7,27 @@ is installed automatically — the add-on never creates a repository or edits yo
 | File | What it is | Where it goes |
 |---|---|---|
 | `gitignore` | Whitelist-style `.gitignore` | `/homeassistant/.gitignore` (copy, then adapt) |
-| `pre-commit` | Credential, dashboard and syntax check | stays here; run with `sh` |
-| `claude-precommit.sh` | Claude Code hook that runs `pre-commit` before Claude's commits | stays here; wired in `~/.claude/settings.json` |
+| `/usr/local/share/claudecode/git-hooks/pre-commit` | Credential, dashboard and syntax check | stays there; enabled with `core.hooksPath` |
 | `git_backup.sh` | Commit + push for changes made outside Claude sessions | `/homeassistant/shell/git_backup.sh` |
 
-Claude: follow these steps only after the user agreed to set this up, and show them the
-result of step 3 before the first commit.
+## What the user does
 
-## 1. Create the repository
+Two things only the user can do on GitHub (or any git host):
+
+1. Create an **empty, private** repository (no README, no licence — the first push fills it).
+2. Create a **fine-grained personal access token** limited to that one repository, with
+   *Contents: read and write*.
+
+Then ask Claude to "set up git backup of my config to <repository URL>" and hand over the
+token when asked. Claude asks for the name and email to commit under, and shows what the
+first commit would contain before making it.
+
+## What Claude does
+
+Follow these steps only after the user asked for the setup, and show them the result of
+step 3 before the first commit.
+
+### 1. Create the repository
 
 ```sh
 cd /homeassistant
@@ -23,10 +36,19 @@ git init -b main
 # and the HA Core container (step 7) has none either.
 git config user.name  "<name>"
 git config user.email "<email>"
+git config core.hooksPath /usr/local/share/claudecode/git-hooks
 cp /usr/share/claudecode/git/gitignore .gitignore
 ```
 
-## 2. Adapt `.gitignore`
+`core.hooksPath` turns on the commit check for every commit made in this add-on, Claude's
+and the user's at the terminal: it refuses a commit that would include a credential, leave
+a storage dashboard ignored, or contain a YAML / JSON / Python / dashboard-JS file that
+does not parse. The hook has to live under `/usr/local/`: the add-on's AppArmor profile
+does not let it execute anything in `/homeassistant`, so a hook there (`.git/hooks/` or a
+`core.hooksPath` inside the config directory) fails every commit with
+`cannot exec … Permission denied`.
+
+### 2. Adapt `.gitignore`
 
 The template ignores everything that can hold a credential and treats `.storage/` and
 `.claudecode/` as whitelists. Adapt it to the install:
@@ -39,55 +61,34 @@ The template ignores everything that can hold a credential and treats `.storage/
 - Keep the backup-file patterns at the bottom: git applies the last matching pattern, so
   `*.bak` above `!/.storage/lovelace.*` would re-include `.storage/lovelace.<id>.bak`.
 
-## 3. Review what would be committed
+### 3. Review what would be committed
 
 ```sh
-git add -A --dry-run | less                    # every file of the first commit
+git add -A
+git status --short | less                      # every file of the first commit
 git status --ignored --short | grep '^!!'      # what is being left out
 rg -n -i '(api_key|password|token|secret|bearer)\s*:' --glob '*.yaml' --glob '!secrets.yaml' .
-sh /usr/share/claudecode/git/pre-commit
+sh /usr/local/share/claudecode/git-hooks/pre-commit
 ```
 
 Every hit from the `rg` line must be a `!secret` reference or moved into `secrets.yaml`
 before the first commit — git history keeps a credential even after the file is fixed.
 
-## 4. First commit, private remote
+### 4. First commit, private remote
 
 ```sh
-git add -A && git commit -m "Initial Home Assistant config"
-```
-
-The remote must be a **private** repository. Push auth: a fine-grained personal access
-token limited to that one repository (Contents: read and write), embedded in the remote URL:
-
-```sh
+git commit -m "Initial Home Assistant config"
 git remote add origin https://<user>:<token>@github.com/<user>/<repo>.git
 git push -u origin main
 ```
 
-The URL form works from both containers that push (this add-on and HA Core, step 7) —
-`gh auth login` persists in this add-on but HA Core cannot use it. The cost: the token sits
-in `.git/config`, which is inside HA backups and readable by anything with file access
-(scheduled jobs cannot read `.git/`). Hence the one-repository scope. Never print
-`git remote -v` into notifications, logs or reports.
+The token in the remote URL works from both containers that push (this add-on and HA
+Core, step 7) — `gh auth login` persists in this add-on but HA Core cannot use it. The
+cost: the token sits in `.git/config`, which is inside HA backups and readable by anything
+with file access (scheduled jobs cannot read `.git/`). Hence the one-repository scope.
+Never print `git remote -v` into notifications, logs or reports.
 
-## 5. Claude's commit check
-
-Add to `~/.claude/settings.json` (merge with any existing `hooks`):
-
-```json
-"hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [ { "type": "command",
-  "command": "sh /usr/share/claudecode/git/claude-precommit.sh", "timeout": 120,
-  "statusMessage": "Checking config files before commit" } ] } ] }
-```
-
-Every `git commit` Claude runs against `/homeassistant` is then blocked (with the reason)
-if it would commit a credential, leave a storage dashboard ignored, or include a YAML /
-JSON / Python / dashboard-JS file that does not parse. Do **not** use `core.hooksPath` or
-`.git/hooks/`: `/homeassistant` is noexec for this add-on, and git then fails every commit
-with `cannot exec … Permission denied`.
-
-## 6. Session workflow
+### 5. Session workflow
 
 The add-on's `CLAUDE.md` tells Claude to work this way whenever `/homeassistant` is a
 repository:
@@ -99,7 +100,7 @@ repository:
 - No `.bak` copies — the history is the backup.
 - Never `git add -f` an ignored file and never `--no-verify`; extend the whitelist instead.
 
-## 7. Safety net for changes outside sessions
+### 6. Safety net for changes outside sessions
 
 ```sh
 mkdir -p /homeassistant/shell
@@ -128,8 +129,9 @@ shell_command:
 ```
 
 `shell_command` runs inside the HA Core container, which has git: the path there is
-`/config`, not `/homeassistant`. This commit bypasses the Claude hook — the whitelist
-`.gitignore` is what keeps credentials out of it.
+`/config`, not `/homeassistant`. The hook path does not exist in that container, so git
+skips the check there — the whitelist `.gitignore` is what keeps credentials out of these
+commits.
 
 ## What to expect
 
@@ -137,16 +139,25 @@ shell_command:
   `supported_features`). That noise in the diffs is normal.
 - HACS-managed `custom_components/` and `www/community/` are tracked by default: large,
   but a restore then needs no re-download. Ignore them if the repository size matters.
+- The check reads every staged file, so a file that does not parse blocks the commit even
+  when Claude's change did not touch it — typically a UI edit, or a file HA or an add-on
+  was half-way through writing. Retry a moment later, fix the file, or leave it out with
+  `git restore --staged <file>`; `--no-verify` only when the user says so.
 
 ## Restoring from the repository
 
-The repository is not a complete backup — HA's own backups are. What it cannot bring back:
+The repository is not a complete backup — HA's own backups are. What a clone does not bring
+back:
 
+- `.git/config`: the repo-local identity, `core.hooksPath` and the remote with its token
+  (step 1 and 4 again, with a new token).
 - `secrets.yaml` — keep a copy in a password manager.
 - Every integration in `core.config_entries` — set them up again.
 - Users (`.storage/auth`): `condition: user` rules in dashboards reference user ids. Keep
   a sanitized list of user ids and names (nothing else) in the repository so those rules
   can be re-pointed after a restore.
+- Claude's own settings (`.claudecode/settings.json`, memory): ignored by the template
+  because they can hold credentials. Whitelist a file deliberately if it is token-free.
 
 ## If a credential was committed
 

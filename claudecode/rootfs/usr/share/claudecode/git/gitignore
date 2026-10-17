@@ -7,7 +7,7 @@
 # of them (.storage/ and .claudecode/) are WHITELISTS. A blacklist ("ignore the token
 # files") goes wrong silently: every new integration drops its OAuth token into .storage/
 # under a name nobody listed. A whitelist goes wrong loudly: a new file is untracked until
-# someone adds it (the pre-commit check next to this file catches the one case where that
+# someone adds it (the pre-commit hook, see README.md, catches the one case where that
 # hurts: storage dashboards).
 #
 # ORDER MATTERS. git applies the LAST matching pattern, so the backup-file patterns at the

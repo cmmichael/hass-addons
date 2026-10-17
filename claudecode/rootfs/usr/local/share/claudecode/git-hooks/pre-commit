@@ -1,42 +1,42 @@
 #!/bin/sh
-# Pre-commit check for a git-backed Home Assistant config directory.
-# Shipped by the Claude Code add-on: /usr/share/claudecode/git/pre-commit (see README.md
-# next to it). Run it with `sh`, from anywhere inside the repository:
+# Pre-commit hook for a git-backed Home Assistant config directory. Shipped by the Claude
+# Code add-on (setup: /usr/share/claudecode/git/README.md). Enable it once per repository:
 #
-#   sh /usr/share/claudecode/git/pre-commit
+#   git -C /homeassistant config core.hooksPath /usr/local/share/claudecode/git-hooks
 #
-# It is deliberately NOT a git hook. /homeassistant is mounted noexec for this add-on
-# (AppArmor), so pointing core.hooksPath at a script in the config dir makes EVERY commit
-# fail with "cannot exec ... Permission denied". Instead claude-precommit.sh (next to this
-# file) runs it as a Claude Code PreToolUse hook before each `git commit` Claude issues.
+# It lives here, not in the config directory, because the add-on's AppArmor profile only
+# lets it execute files under /usr/{bin,lib,local}/ — a hook inside /homeassistant fails
+# every commit with "cannot exec ... Permission denied". Every commit made in this add-on
+# (Claude's or yours at the terminal) runs it. The HA Core container has no such path, so
+# git there skips it: git_backup.sh commits rely on the .gitignore whitelist alone.
 #
-# It checks everything the next `git add -A && git commit` would include — staged,
-# unstaged and untracked-but-not-ignored files — because Claude stages and commits in one
-# command, so at hook time nothing is staged yet.
+# It checks what is being committed (the index):
 #
 #   1. credentials       secrets.yaml, .storage auth/token stores, the jobs package
-#                        token, Claude's own credentials: refused if tracked or about to be
+#                        token, Claude's own credentials: refused if in the index
 #   2. dashboards        every storage dashboard's .storage/lovelace.<id> must not be
 #                        git-ignored (a .storage whitelist silently drops new dashboards)
-#   3. syntax            *.yaml/*.yml load (HA tags accepted), *.json and .storage/* parse,
-#                        *.py compiles, www/ *.js and inline <script> blocks parse (node)
+#   3. syntax            staged *.yaml/*.yml load (HA tags accepted), *.json and .storage/*
+#                        parse, *.py compiles, www/ *.js and inline <script> blocks parse
+#                        (node). The working-tree copy is read, so stage whole files.
 #
 # custom_components/ and www/community/ (HACS-managed) are skipped for syntax.
-# Exit 0 = fine, 1 = refuse the commit.
+# Exit 0 = fine, 1 = refuse the commit. Run by hand (after `git add`) with
+# `sh /usr/local/share/claudecode/git-hooks/pre-commit` from inside the repository.
 fail=0
 top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "pre-commit: not inside a git repository"; exit 1; }
 cd "$top" || exit 1
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-changed=$( { git diff --cached --name-only --diff-filter=ACMR; git diff --name-only --diff-filter=ACMR; git ls-files --others --exclude-standard; } | sort -u )
-would_track=$( { git ls-files; git ls-files --others --exclude-standard; } | sort -u )
+changed=$(git diff --cached --name-only --diff-filter=ACMR)
+indexed=$(git ls-files)
 
 # --- 1. credentials -------------------------------------------------------------------
 # Paths that hold tokens, keys or password hashes. A whitelist .gitignore keeps them out;
 # this is the backstop for a blacklist one, a `git add -f`, or a file tracked before the
 # .gitignore existed (ignoring a tracked file does nothing — `git rm --cached` it).
-secret_hits=$(printf '%s\n' "$would_track" | grep -E \
+secret_hits=$(printf '%s\n' "$indexed" | grep -E \
   -e '(^|/)secrets\.yaml$' \
   -e '^\.cloud/' \
   -e '^\.storage/(auth|auth_provider\..*|auth_module\..*|core\.config_entries|application_credentials|cloud|mobile_app|onboarding)$' \
@@ -112,7 +112,8 @@ done 2>&1)
 printf '%s\n' "$syntax_out" | grep -qx FAIL && fail=1
 
 if [ "$fail" -ne 0 ]; then
-  echo "pre-commit: commit refused - fix the file(s) above."
+  echo "pre-commit: commit refused - fix the file(s) above. A file HA or an add-on is still"
+  echo "  writing may parse a moment later; to commit without a file: git restore --staged <file>"
   exit 1
 fi
 exit 0

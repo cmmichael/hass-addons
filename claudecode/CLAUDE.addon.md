@@ -129,67 +129,46 @@ way to "do the work" of this conversation — it is for scheduled or one-off hea
 
 Check once per session: `git -C /homeassistant rev-parse --is-inside-work-tree`.
 
-**If `/homeassistant` is a git repository**, every config change goes through it:
+**If it is a repository:** before the first change of the session, commit outside changes
+(UI edits, HACS updates, registry churn) as `Pre-session snapshot`; after each logical
+change, commit with a message saying what changed and why — one change per commit, and
+push if a remote is set. The history is the backup: no `.bak` copies. Never `git add -f`
+or `--no-verify` unless the user asks; extend the `.gitignore` whitelist instead. If the
+pre-commit hook refuses, fix the file it names. Credentials go in `secrets.yaml` via
+`!secret`; `claudecode_jobs.yaml` is never committed.
 
-- Before the first change of the session, commit whatever changed outside the session
-  (UI edits, HACS updates, registry churn) as `Pre-session snapshot`, and push if a
-  remote is configured.
-- After each logical change, commit (and push) with a message saying what changed and
-  why. One change per commit — don't batch unrelated changes.
-- The history is the backup: no `.bak` copies next to edited files.
-- Never `git add -f` an ignored file and never commit with `--no-verify` unless the user
-  asks. If something valuable is ignored, extend the `.gitignore` whitelist deliberately.
-- Credentials go in `secrets.yaml` via `!secret`, never in a tracked file.
-  `claudecode_jobs.yaml` (the add-on's token-bearing package) must never be committed.
-- Git hooks cannot run from `/homeassistant` (noexec mount — `core.hooksPath` pointing
-  there fails every commit). The commit check is a Claude Code hook instead:
-  `/usr/share/claudecode/git/claude-precommit.sh`.
-
-**If it is not a repository** and the user asks for a config change, offer once to set
-it up — don't do it unasked. The steps, a whitelist `.gitignore`, the commit check and a
-safety-net backup script are in `/usr/share/claudecode/git/` (start with its README.md).
+**If it is not**, and the user asks for a config change, offer the setup once — don't do it
+unasked. Steps: `/usr/share/claudecode/git/README.md`.
 
 ## Working on a live Home Assistant
 
-- **Read live state before acting** on or explaining any sensor, helper or "the last X":
-  a fresh read of every entity involved now (plus history when the question is what
-  changed), never a value read earlier in the session. REST works when the MCP server
-  times out: `curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/core/api/states/<entity_id>`.
-- **Apply with the lightest step.** Most YAML domains have a reload service
-  (`automation.reload`, `script.reload`, `template.reload`, `input_*.reload`, ...);
+- **Read live state before acting** on or explaining any sensor, helper or "the last X" —
+  a fresh read now (plus history when the question is what changed), never an earlier
+  value. REST works when MCP times out: `curl -s -H "Authorization: Bearer
+  $SUPERVISOR_TOKEN" http://supervisor/core/api/states/<entity_id>`.
+- **Reload before restart.** Most YAML domains have a `<domain>.reload` service;
   `shell_command`, `logger`, `recorder`, `utility_meter`, `history_stats`, `sql` and
-  `packages` changes need a restart. Run `ha core check` before every restart.
-- **A restart can end this session** (it resumes automatically afterwards). Finish the
-  edits and write down conclusions and next steps before you restart — never make a
-  restart the middle step of an unfinished plan.
-- **Don't hand-edit `.storage/` while HA runs.** HA keeps it in memory and rewrites it on
-  shutdown, so an edit followed by a restart is silently reverted. Use the WebSocket API
-  instead — `ha-ws` sends commands (`config/entity_registry/update` with
-  `new_entity_id`, `config/device_registry/update`, `lovelace/config/save`,
-  `energy/save_prefs`). With no API for a field: `ha core stop`, edit, `ha core start`.
-- **Dashboards are cached** in HA and in every browser. After a change, browsers need a
-  hard refresh. Never "flush" with a no-op save in the raw configuration editor — it
-  writes HA's stale copy back over your edit. Files under `/local/` (= `www/`) are cached
-  for 31 days: change a `?v=N` query parameter on the resource URL with each deploy.
-- **`shell_command` runs in the HA Core container**, so its scripts are referenced as
-  `/config/...` even though you edit them at `/homeassistant/...`. Nothing under
-  `/homeassistant` is executable from *this* container: run scripts as `sh x.sh` /
-  `python3 x.py`, not `./x.sh`.
-- **Template booleans:** in `variables:` and other native-type templates, emit
-  `{{ true }}` / `{{ false }}` or an expression. A bare `false` written as text in an
-  `{% if %}` branch renders the string "false", which is truthy.
-- **Restarts replay states.** `unavailable → <restored value>` on startup is a real state
-  transition, so a state trigger fires on every restart unless it has
-  `not_from: [unavailable, unknown]`. With `attribute:`, `from`/`not_from` compare the
-  attribute (which is `None` while unavailable), so that guard does not work there —
-  trigger on the state, or test the attribute in a condition.
-- **Statistics come back in display units** (`statistics_during_period` returns kWh even
-  when the metadata says Wh); pass `units` explicitly instead of converting.
-- **Design rationale goes in the config:** an automation's `description:` or a YAML
-  comment should say why a threshold, `for:` or guard exists. Read those before changing
-  behaviour, and write them for what you add.
-- **Supervisor stuck on "updating"** / unhealthy after a failed update: `ha supervisor
-  restart`; it retries the update by itself. Diagnose with `ha resolution info`.
+  `packages` need a restart — after `ha core check`. A restart can end this session: finish
+  the edits and write down conclusions first, never restart mid-plan.
+- **Don't hand-edit `.storage/` while HA runs** — HA rewrites it from memory on shutdown.
+  Use the WebSocket API via `ha-ws` (`config/entity_registry/update`, `lovelace/config/save`,
+  `energy/save_prefs`, ...); with no API for a field: `ha core stop`, edit, `ha core start`.
+- **Dashboards are cached** in HA and browsers: hard-refresh after a change, and never
+  "flush" with a no-op save in the raw editor (it writes the stale copy back). `/local/`
+  (= `www/`) is cached 31 days: bump a `?v=N` on the resource URL with each deploy.
+- **`shell_command` runs in the HA Core container**: reference scripts as `/config/...`.
+  Nothing under `/homeassistant` may execute in *this* container (AppArmor): run scripts
+  as `sh x.sh` / `python3 x.py`, not `./x.sh`.
+- **Template booleans:** in native-type templates (`variables:` etc.) emit `{{ true }}` /
+  `{{ false }}`; a bare `false` in an `{% if %}` branch renders the truthy string "false".
+- **Restarts replay states:** `unavailable → <value>` fires state triggers unless they have
+  `not_from: [unavailable, unknown]` — which does not work with `attribute:` (compares the
+  attribute); trigger on the state or test the attribute in a condition instead.
+- **Statistics come back in display units** — pass `units` explicitly.
+- **Rationale goes in the config:** `description:` or a YAML comment says why a threshold,
+  `for:` or guard exists. Read it before changing behaviour; write it for what you add.
+- **Supervisor stuck "updating"/unhealthy:** `ha supervisor restart` (it retries the
+  update); diagnose with `ha resolution info`.
 
 ## User instructions
 
