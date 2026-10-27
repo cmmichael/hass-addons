@@ -1,6 +1,6 @@
 name: Pomerium
 description: Identity-aware reverse proxy - secure external access to Home Assistant and add-ons with SSO, no VPN needed
-version: "0.1.0"
+version: "0.1.1"
 slug: pomerium
 url: https://github.com/con-ant/hass-addons
 arch:

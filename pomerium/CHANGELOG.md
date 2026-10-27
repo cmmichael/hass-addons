@@ -2,6 +2,29 @@
 
 All notable changes to this add-on will be documented in this file.
 
+## [0.1.1] - 2026-10-27
+
+### Changed
+- Pomerium v0.33.1 -> v0.33.6. Security-relevant changes in between:
+  - v0.33.4: fixes GHSA-pj2c-mjp8-p2m9 (upstream connections not reused
+    across downstream clients; denial of service under many unique clients,
+    e.g. internet-facing bot traffic) and updates the embedded Envoy from
+    v1.38.2 to v1.38.5, which carries the Envoy security fixes from v1.38.3
+    and v1.38.4 (among them CVE-2026-47778 TLS SAN truncation auth bypass,
+    CVE-2026-73553 RBAC path-parameter auth bypass, CVE-2026-48743 HTTP/3
+    request smuggling and a dozen crash/DoS fixes).
+  - v0.33.5: hardens MCP request authorization (case-sensitive JSON member
+    matching, rejects malformed/empty methods).
+  - v0.33.6: refreshed CA bundle in the upstream distroless image to distrust
+    the compromised eMudhra intermediates. This add-on only copies the
+    `pomerium` binary out of that image; the trust store Envoy uses here is
+    the HA Debian base's `ca-certificates`, installed fresh at build time
+    (upstream requires `20250419~deb12u2` or newer for the same distrust).
+  - v0.33.3: fixes for gRPC/MCP outbound connection reloads (no security
+    impact). v0.33.2 was never published.
+- No configuration changes: no new, renamed or removed options between
+  v0.33.1 and v0.33.6, and the generated config is unchanged.
+
 ## [0.1.0] - 2026-08-19
 
 ### Added
