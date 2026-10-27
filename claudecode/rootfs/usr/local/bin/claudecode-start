@@ -74,6 +74,11 @@ JOB_ENDPOINT_PORT=7682
 JOB_ENDPOINT_BIN=${JOB_ENDPOINT_BIN:-/usr/local/bin/claude-job-endpoint}
 JOB_LIB=/usr/local/lib/claude-job
 
+# Per-pane session state from claude-session-hook (apply_claude_updates).
+PANE_STATE_DIR=$RUN_DIR/panes
+SESSION_HOOK=/usr/local/bin/claude-session-hook
+UPDATE_WATCHER_PID=""
+
 cd_work() { cd /homeassistant 2>/dev/null || cd /; }
 
 # ttyd is not exec'd: this script stays PID 1's child so a Supervisor stop
@@ -101,6 +106,7 @@ start_ttyd() {
   else
     err "ttyd exited with status $rc; stopping the add-on (if this repeats, the boot loop starts here)"
   fi
+  stop_update_watcher
   shutdown_jobs   # ttyd died on its own: don't orphan the endpoint or in-flight runs
   exit $rc
 }
@@ -130,6 +136,9 @@ descendants() {  # $1 = pid -> all descendant pids, depth first
 }
 stop_sessions() {
   local root pids="" pid alive i
+  # A pending update restart would make claude-auto-launch relaunch the
+  # Claude we are about to stop.
+  rm -f "$PANE_STATE_DIR"/*/restart-for-update 2>/dev/null
   for root in $(tmux list-panes -a -F '#{pane_pid}' 2>/dev/null) \
               $([ -n "$TTYD_PID" ] && pgrep -P "$TTYD_PID" 2>/dev/null); do
     pids="$pids $(descendants "$root")"
@@ -149,6 +158,12 @@ stop_sessions() {
   [ -n "$alive" ] && warn "Claude did not exit within ${STOP_GRACE_SECS}s; stopping anyway"
   [ -n "$tmux_mode" ] && tmux kill-server 2>/dev/null
   return 0
+}
+stop_update_watcher() {
+  [ -n "$UPDATE_WATCHER_PID" ] || return 0
+  kill -TERM "$UPDATE_WATCHER_PID" 2>/dev/null
+  wait "$UPDATE_WATCHER_PID" 2>/dev/null
+  UPDATE_WATCHER_PID=""
 }
 stop_ttyd() {
   [ -n "$TTYD_PID" ] || return 0
@@ -221,6 +236,7 @@ reap_job_runs() {  # <= JOB_STOP_GRACE_SECS, then KILL whatever is left
 shutdown_jobs() { stop_job_spawners; signal_job_runs; reap_job_runs; }
 on_stop() {
   trap - EXIT TERM INT HUP
+  stop_update_watcher # no update restart may start while we stop
   stop_job_spawners   # nothing new can spawn
   signal_job_runs     # TERM lands early ...
   stop_sessions       # ... so runners drain while the interactive session tears down
@@ -331,6 +347,7 @@ read_options() {
   ENABLE_PLAYWRIGHT=$(opt '.enable_playwright_mcp // false')
   PLAYWRIGHT_HOST=$(opt '.playwright_cdp_host // ""')
   AUTO_UPDATE=$(opt '.auto_update_claude // false')
+  APPLY_UPDATES=$(opt 'if .apply_claude_updates == null then true else .apply_claude_updates end')
   DEFAULT_MODE=$(opt '.default_permission_mode // "auto"')
   ENABLE_RC=$(opt '.enable_remote_control // false')
   RC_PREFIX=$(opt '.remote_control_session_prefix // "HomeAssistant"')
@@ -343,7 +360,7 @@ read_options() {
   USAGE_KEEPALIVE=$(opt '.usage_keepalive_job // ""')
   # Sane fallbacks if options.json itself was unreadable.
   : "${FONT_SIZE:=14}" "${THEME:=dark}" "${SESSION_PERSIST:=true}" "${ENABLE_MCP:=true}"
-  : "${ENABLE_PLAYWRIGHT:=false}" "${AUTO_UPDATE:=false}" "${DEFAULT_MODE:=auto}"
+  : "${ENABLE_PLAYWRIGHT:=false}" "${AUTO_UPDATE:=false}" "${APPLY_UPDATES:=true}" "${DEFAULT_MODE:=auto}"
   : "${ENABLE_RC:=false}" "${RC_PREFIX:=HomeAssistant}" "${AUTO_LAUNCH:=continue}"
   : "${JOB_DEFAULT_MODEL:=opus}" "${ENABLE_JOBS:=false}" "${ENABLE_USAGE:=true}" "${USAGE_INTERVAL:=300}"
 }
@@ -498,6 +515,36 @@ apply_settings() {
   else
     settings_set 'del(.remoteControlAtStartup)' || warn "Could not clear remoteControlAtStartup in settings.json"
   fi
+}
+
+# apply_claude_updates: claude-session-hook records each tmux pane's
+# conversation and whether a turn is in flight; claude-update-watcher uses that
+# to restart idle sessions onto an installed update. The hooks live in the
+# user's settings.json, which Claude Jobs never load (--setting-sources ""),
+# and are recognised by their command path: any other hook is left alone, and
+# turning the option off removes exactly these.
+apply_session_hooks() {
+  local on=false
+  [ "$APPLY_UPDATES" = "true" ] && on=true
+  # shellcheck disable=SC2016  # $cmd and $on are jq variables
+  if settings_set --arg cmd "$SESSION_HOOK" --argjson on "$on" '
+      def ours: (.command // "") | startswith($cmd);
+      def strip: map(.hooks = ((.hooks // []) | map(select(ours | not))))
+                 | map(select(.hooks | length > 0));
+      def entry($ev): [{hooks: [{type: "command", command: ($cmd + " " + $ev), timeout: 10}]}];
+      .hooks = ((.hooks // {}) | with_entries(.value |= strip) | with_entries(select(.value | length > 0)))
+      | if $on then
+          .hooks.SessionStart += entry("start")
+          | .hooks.UserPromptSubmit += entry("prompt")
+          | .hooks.Stop += entry("stop")
+        else . end
+      | if .hooks == {} then del(.hooks) else . end'; then
+    [ "$on" = true ] && info "Session hooks installed (apply_claude_updates)"
+  else
+    warn "Could not update the session hooks in settings.json; idle update restarts are off this boot"
+    APPLY_UPDATES=false
+  fi
+  mkdir -p "$PANE_STATE_DIR" 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -729,6 +776,7 @@ run_step "probe claude CLI" check_claude
 run_step "job CLI preflight" cli_preflight_log
 run_step "configure MCP servers" configure_mcp
 run_step "apply settings.json options" apply_settings
+run_step "session hooks" apply_session_hooks
 run_step "pre-authorize job commands" allow_job_commands
 run_step "set up job directories" setup_job_dirs
 run_step "ensure job endpoint token" ensure_job_token
@@ -759,9 +807,23 @@ prestart_session() {
   fi
 }
 
+# Restart idle sessions onto Claude Code's own background updates. Only
+# sessions under tmux that claude-auto-launch supervises can be relaunched.
+start_update_watcher() {
+  [ "$APPLY_UPDATES" = "true" ] || return 0
+  [ "$SESSION_PERSIST" = "true" ] && [ "$AUTO_LAUNCH" != "off" ] || {
+    info "apply_claude_updates needs session_persistence and auto_launch_claude; idle update restarts are off"
+    return 0
+  }
+  ( trap - INT QUIT; exec /usr/local/bin/claude-update-watcher ) &
+  UPDATE_WATCHER_PID=$!
+  info "Idle sessions move onto Claude Code updates after ${CLAUDE_UPDATE_IDLE_SECS:-900}s without activity"
+}
+
 run_step "build terminal command" build_shell_cmd
 run_step "pre-start Claude session" prestart_session
 run_step "start job endpoint" start_job_endpoint
+run_step "start update watcher" start_update_watcher
 
 trap - EXIT
 CURRENT_STEP="web terminal (ttyd)"

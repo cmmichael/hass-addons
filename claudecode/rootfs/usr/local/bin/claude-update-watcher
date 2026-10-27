@@ -1,0 +1,103 @@
+#!/bin/bash
+# claude-update-watcher: move idle Claude sessions onto an installed update.
+#
+# Claude Code updates itself in the background: it installs the new release
+# over /usr/local/lib/node_modules/@anthropic-ai/claude-code, but every
+# running session keeps executing the old binary until it is restarted. On an
+# unattended box (Remote Control, a session pre-started at boot) nobody ever
+# restarts it, so the session runs an old release indefinitely.
+#
+# Every POLL_SECS this looks at each tmux pane whose root is
+# claude-auto-launch. When the pane's claude is running an older binary than
+# the installed one, and the session is idle, it marks the pane and sends
+# claude SIGTERM; claude-auto-launch sees the mark and relaunches the new
+# release on the same conversation (claude-session-hook recorded its id).
+#
+# Idle means both:
+#   - no turn in flight: the Stop hook stamped the last finished turn at or
+#     after the last prompt. An interrupted turn fires no Stop hook, so a pane
+#     that has been quiet for STALE_TURN_SECS counts as idle anyway;
+#   - the pane has been quiet for IDLE_SECS: nothing printed (tmux
+#     window_activity; Claude's spinner prints while it works) and nothing
+#     typed by an attached client (session_activity).
+#
+# A release is only moved onto once `claude --version` answers from it, so a
+# release that cannot run on this host (the AVX story in install-claude.sh)
+# never takes a working session down. Started by claudecode-start when
+# apply_claude_updates is on; stopped by its on_stop.
+POLL_SECS=${CLAUDE_UPDATE_POLL_SECS:-60}
+IDLE_SECS=${CLAUDE_UPDATE_IDLE_SECS:-900}
+STALE_TURN_SECS=${CLAUDE_UPDATE_STALE_TURN_SECS:-3600}
+PANES=${CLAUDE_PANE_STATE_DIR:-/run/claudecode/panes}
+
+info() { echo "[$(date +%H:%M:%S)] [INFO] $*"; }
+warn() { echo "[$(date +%H:%M:%S)] [WARN] $*"; }
+
+verified=""   # "<inode>:ok" or "<inode>:bad" for the installed binary last checked
+
+# Sets BIN to the installed binary once it is known to run. Fails while an
+# update is mid-install or when the new release does not run here. Not called
+# in a subshell: the verdict is cached per inode in $verified.
+installed_ok() {
+  local bin ino out
+  bin=$(readlink -f "$(command -v claude)" 2>/dev/null) || return 1
+  [ -x "$bin" ] || return 1
+  ino=$(stat -c %i "$bin" 2>/dev/null) || return 1
+  case $verified in
+    "$ino:ok")  BIN=$bin; return 0 ;;
+    "$ino:bad") return 1 ;;
+  esac
+  if out=$(timeout 30 "$bin" --version < /dev/null 2>&1); then
+    verified="$ino:ok"
+    INSTALLED_VERSION=${out%% *}
+    BIN=$bin
+    info "Claude Code $INSTALLED_VERSION is installed; idle sessions on an older release will be restarted onto it"
+  else
+    verified="$ino:bad"
+    warn "The installed Claude Code does not run here ($(printf '%s' "$out" | tail -1)); sessions stay on the release they run"
+    return 1
+  fi
+}
+
+# The pane's claude: the child of the claude-auto-launch root whose executable
+# is (or was, before the update deleted it) the npm-installed Claude Code.
+pane_claude() {  # $1 = pane root pid
+  local kid exe
+  for kid in $(pgrep -P "$1" 2>/dev/null); do
+    exe=$(readlink "/proc/$kid/exe" 2>/dev/null) || continue
+    case $exe in */@anthropic-ai/*) echo "$kid"; return 0 ;; esac
+  done
+  return 1
+}
+
+while sleep "$POLL_SECS"; do
+  installed_ok || continue
+  now=$(date +%s)
+  while read -r pane root win_act sess_act; do
+    case $(tr '\0' ' ' < "/proc/$root/cmdline" 2>/dev/null) in
+      *claude-auto-launch*) ;;
+      *) continue ;;   # a shell or a claude started by hand: nobody would relaunch it
+    esac
+    pid=$(pane_claude "$root") || continue
+    [ "/proc/$pid/exe" -ef "$BIN" ] && continue   # already on the installed release
+    quiet=$(( now - (win_act > sess_act ? win_act : sess_act) ))
+    [ "$quiet" -ge "$IDLE_SECS" ] || continue
+    state=$PANES/${pane#%}
+    last_prompt=$(cat "$state/last-prompt" 2>/dev/null || echo 0)
+    last_stop=$(cat "$state/last-stop" 2>/dev/null || echo 0)
+    if [ "$last_prompt" -gt "$last_stop" ] && [ "$quiet" -lt "$STALE_TURN_SECS" ]; then
+      continue   # a turn is in flight
+    fi
+    # The installed release may have changed since the top of this round:
+    # check it again (cached unless the file changed) so a session is only
+    # ever moved onto a release that has answered --version.
+    installed_ok || break
+    [ "/proc/$pid/exe" -ef "$BIN" ] && continue
+    mkdir -p "$state" 2>/dev/null && touch "$state/restart-for-update" 2>/dev/null || {
+      warn "Cannot mark pane $pane for restart; leaving it on the older release"
+      continue
+    }
+    info "Restarting the Claude session in pane $pane (pid $pid, idle ${quiet}s) onto Claude Code ${INSTALLED_VERSION:-update}; it resumes the same conversation"
+    kill -TERM "$pid" 2>/dev/null || rm -f "$state/restart-for-update"   # it exited by itself meanwhile
+  done < <(tmux list-panes -a -F '#{pane_id} #{pane_pid} #{window_activity} #{session_activity}' 2>/dev/null)
+done

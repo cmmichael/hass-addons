@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.21] - 2026-10-27
+
+### Added
+- **Idle sessions move onto Claude Code updates** (`apply_claude_updates`, on by
+  default). Claude Code installs its own updates in the background, but a running
+  session keeps executing the old release until it restarts. On a box that runs
+  unattended, with Remote Control or a session started at boot, that is never.
+  A watcher now restarts an idle session onto the installed release, and the
+  session resumes the same conversation. Idle means no turn running and nothing
+  printed or typed in the pane for 15 minutes. A release is only moved onto once
+  it answers `claude --version`, so one that cannot run here never takes a
+  working session down. Sessions started by hand from a shell are left alone.
+
+### Changed
+- A crash relaunch now resumes the pane's own conversation. Before, it resumed
+  the most recent one in the directory, which could belong to another tmux
+  window. This needs `apply_claude_updates`; with it off, the relaunch uses
+  `--continue` as before.
+- `settings.json` gains three hooks (SessionStart, UserPromptSubmit, Stop) that
+  call `/usr/local/bin/claude-session-hook`. They are removed again when the
+  option is off. Your own hooks are never touched, and Claude Jobs do not load
+  them.
+
 ## [1.2.65-con.20] - 2026-10-17
 
 ### Added

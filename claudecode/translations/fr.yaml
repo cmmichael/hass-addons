@@ -48,6 +48,15 @@ configuration:
       Vérifiez et installez automatiquement les mises à jour de Claude Code au
       démarrage du module complémentaire. Garde Claude Code à jour sans nécessiter
       de changements de version du module complémentaire.
+  apply_claude_updates:
+    name: Appliquer les mises à jour de Claude Code
+    description: >-
+      Claude Code installe ses propres mises à jour en arrière-plan, mais une
+      session en cours garde l'ancienne version jusqu'à son redémarrage. Avec
+      cette option, une session inactive (aucun tour en cours, aucune activité
+      pendant 15 minutes) redémarre sur la mise à jour installée et reprend la
+      même conversation. Nécessite la persistance de session et le lancement
+      automatique.
   enable_remote_control:
     name: Activer le Contrôle à Distance
     description: >-
