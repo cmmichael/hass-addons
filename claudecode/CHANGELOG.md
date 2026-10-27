@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.22] - 2026-10-27
+
+### Added
+- **Remote Control server** (`remote_control_server`, off by default). The add-on
+  can now also run `claude remote-control` beside the terminal session, so you
+  can start new sessions on this box from claude.ai/code or the Claude app, not
+  only steer the terminal session. New sessions work in `/homeassistant` with
+  `default_permission_mode`. The server restarts by itself if it exits, and the
+  log shows its connection and every session that attaches (`[rc-server]`
+  lines). Stopping the add-on stops its sessions gently, as it does the
+  terminal's. With `apply_claude_updates`, the server moves onto Claude Code
+  updates once every session it runs is idle, and those sessions reattach.
+
+### Changed
+- With `apply_claude_updates` on, `auto_launch_claude: continue` resumes the
+  conversation the terminal was last on, kept across restarts. Before, it
+  resumed the newest conversation in `/homeassistant`, which can be one started
+  from the app.
+
 ## [1.2.65-con.21] - 2026-10-27
 
 ### Added

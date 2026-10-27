@@ -111,6 +111,7 @@ claude --continue
 | `auto_launch_claude` | Auto-run Claude when the terminal opens: `off` (bash prompt), `new` (`claude`), or `continue` (`claude --continue`). Drops to a login shell when Claude exits. With `enable_remote_control` on, the session is started at container boot instead (see Remote Control below) | continue |
 | `enable_remote_control` | Turn on [Remote Control](https://code.claude.com/docs/en/remote-control) for all Claude sessions (sets `remoteControlAtStartup` in settings.json and passes `--remote-control` to auto-launches) so you can view and steer sessions from claude.ai/code or the Claude mobile app. Requires Claude Code v2.1.51+, claude.ai OAuth login (not API key), and a Pro/Max/Team/Enterprise plan. See the security note below | false |
 | `remote_control_session_prefix` | Prefix for auto-generated Remote Control session names shown in claude.ai/code and the mobile app (e.g. `HomeAssistant-graceful-unicorn`). Only applies when `enable_remote_control` is on | HomeAssistant |
+| `remote_control_server` | Also run a Remote Control server, so new sessions can be started on this box from claude.ai/code or the Claude app. See [Remote Control](#remote-control) | false |
 | `extra_npm_packages` | List of npm package specs to install at every container start under `/homeassistant/.claudecode/npm-global` (persistent across add-on rebuilds). Bin dir is on `PATH`. Use to add custom MCP servers without forking the Dockerfile. | `[]` |
 | `job_default_model` | Model alias used by scheduled jobs (`~/.claude/jobs/*.md`) that do not set `model:` themselves: `fable`, `opus`, `sonnet` or `haiku`. `fable` is the most capable and the most expensive; a job can pin a cheaper model in its own frontmatter. See [Scheduled jobs](#scheduled-jobs-claude-jobs) | opus |
 | `enable_job_endpoint` | Start the job trigger endpoint (port 7682, add-on network only, bearer token), generate its token on first start, and write the `claudecode_jobs.yaml` package into your config directory on every start. Off = jobs can still be run from the terminal with `claude-job`, but Home Assistant cannot trigger or watch them | false |
@@ -408,6 +409,12 @@ Either way: complete authentication in the browser, **copy the auth code**, clic
 With `enable_remote_control`, sessions can be driven from `claude.ai/code` or the Claude mobile app (requires a Pro, Max, Team, or Enterprise subscription; API keys are not supported).
 
 The Claude session is started when the container boots, not when you open the web terminal, so Remote Control is available after a restart without anyone opening the add-on. This requires `session_persistence: true` (tmux holds the session) and `auto_launch_claude` set to `continue` or `new`; opening the web terminal attaches to the running session. Stopping or restarting the add-on sends Claude a SIGTERM and gives it up to 10s to exit before the container goes down. Set `auto_launch_claude: off` if you do not want Claude running unattended.
+
+With `remote_control_server` on, the add-on also runs `claude remote-control` beside the terminal session. `enable_remote_control` lets you steer the one terminal session. The server lets you start new sessions on this box from claude.ai/code or the Claude app:
+- **Where new sessions run.** They work in `/homeassistant`, with `default_permission_mode`.
+- **What the log shows.** The server reports its connection, the environment link and each session that attaches. Look for lines prefixed `[rc-server]`.
+- **Stops and restarts.** Stopping the add-on stops the server's sessions as gently as the terminal's. With `apply_claude_updates`, the server moves onto Claude Code updates once all its sessions are idle, and they reattach.
+- **Resuming after a restart.** Sessions started this way share the terminal's folder, so with `apply_claude_updates` on the terminal resumes its own last conversation, not the newest one in the folder.
 
 **Security note:** this add-on runs as root with full access to your Home Assistant host. Anyone who can sign in to the linked Claude account can control it. Leave this off unless you need it.
 
