@@ -16,7 +16,9 @@
 # Idle means both:
 #   - no turn in flight: the Stop hook stamped the last finished turn at or
 #     after the last prompt. An interrupted turn fires no Stop hook, so a pane
-#     that has been quiet for STALE_TURN_SECS counts as idle anyway;
+#     that has been quiet for STALE_TURN_SECS counts as idle anyway. A turn
+#     parked on an unanswered permission prompt looks the same, so the
+#     question is dropped after that hour and asked again on resume;
 #   - the pane has been quiet for IDLE_SECS: nothing printed (tmux
 #     window_activity; Claude's spinner prints while it works) and nothing
 #     typed by an attached client (session_activity).
@@ -33,28 +35,40 @@ PANES=${CLAUDE_PANE_STATE_DIR:-/run/claudecode/panes}
 info() { echo "[$(date +%H:%M:%S)] [INFO] $*"; }
 warn() { echo "[$(date +%H:%M:%S)] [WARN] $*"; }
 
-verified=""   # "<inode>:ok" or "<inode>:bad" for the installed binary last checked
+BAD_RETRY_SECS=${CLAUDE_UPDATE_BAD_RETRY_SECS:-600}
+verified=""   # "<key>:ok" or "<key>:bad:<epoch>" for the installed binary last checked
+warned=""     # the key a "does not run here" warning was last logged for
 
 # Sets BIN to the installed binary once it is known to run. Fails while an
 # update is mid-install or when the new release does not run here. Not called
-# in a subshell: the verdict is cached per inode in $verified.
+# in a subshell: the verdict is cached in $verified.
+#
+# The cache key is inode, size and mtime, so a binary npm was still writing
+# when it was first checked is checked again as soon as it is complete. A
+# failure is retried after BAD_RETRY_SECS, so a transient one (the 30 s
+# timeout under load) does not strand sessions until the next release; one
+# that keeps failing, like a release without AVX support, is logged once.
 installed_ok() {
-  local bin ino out
+  local bin key out now
   bin=$(readlink -f "$(command -v claude)" 2>/dev/null) || return 1
   [ -x "$bin" ] || return 1
-  ino=$(stat -c %i "$bin" 2>/dev/null) || return 1
+  key=$(stat -c '%i-%s-%Y' "$bin" 2>/dev/null) || return 1
+  now=$(date +%s)
   case $verified in
-    "$ino:ok")  BIN=$bin; return 0 ;;
-    "$ino:bad") return 1 ;;
+    "$key:ok") BIN=$bin; return 0 ;;
+    "$key:bad:"*) [ $((now - ${verified##*:})) -lt "$BAD_RETRY_SECS" ] && return 1 ;;
   esac
   if out=$(timeout 30 "$bin" --version < /dev/null 2>&1); then
-    verified="$ino:ok"
+    verified="$key:ok"
     INSTALLED_VERSION=${out%% *}
     BIN=$bin
     info "Claude Code $INSTALLED_VERSION is installed; idle sessions on an older release will be restarted onto it"
   else
-    verified="$ino:bad"
-    warn "The installed Claude Code does not run here ($(printf '%s' "$out" | tail -1)); sessions stay on the release they run"
+    verified="$key:bad:$now"
+    if [ "$warned" != "$key" ]; then
+      warned=$key
+      warn "The installed Claude Code does not run here ($(printf '%s' "$out" | tail -1)); sessions stay on the release they run, and it is checked again every ${BAD_RETRY_SECS}s"
+    fi
     return 1
   fi
 }

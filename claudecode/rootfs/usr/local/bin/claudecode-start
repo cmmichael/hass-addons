@@ -521,14 +521,14 @@ apply_settings() {
 # conversation and whether a turn is in flight; claude-update-watcher uses that
 # to restart idle sessions onto an installed update. The hooks live in the
 # user's settings.json, which Claude Jobs never load (--setting-sources ""),
-# and are recognised by their command path: any other hook is left alone, and
+# and are recognised by their command ("<path> <event>"): any other hook is left alone, and
 # turning the option off removes exactly these.
 apply_session_hooks() {
   local on=false
   [ "$APPLY_UPDATES" = "true" ] && on=true
   # shellcheck disable=SC2016  # $cmd and $on are jq variables
   if settings_set --arg cmd "$SESSION_HOOK" --argjson on "$on" '
-      def ours: (.command // "") | startswith($cmd);
+      def ours: (.command // "") | startswith($cmd + " ");
       def strip: map(.hooks = ((.hooks // []) | map(select(ours | not))))
                  | map(select(.hooks | length > 0));
       def entry($ev): [{hooks: [{type: "command", command: ($cmd + " " + $ev), timeout: 10}]}];

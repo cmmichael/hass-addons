@@ -14,10 +14,33 @@
 # claude-auto-launch reads the session id to resume the pane's own
 # conversation instead of whichever one `--continue` would pick.
 #
+# Only the claude that claude-auto-launch started counts: the hook finds the
+# Claude process it runs for and checks that its parent is the launcher. A
+# `claude -p` typed in the pane's shell after /exit, or one Claude runs as a
+# tool, inherits TMUX_PANE but would otherwise overwrite the pane's
+# conversation with its own one-off.
+#
 # Outside tmux it does nothing; Claude Jobs never load these hooks at all
 # (they run with --setting-sources ""). It must never get in Claude's way, so
 # it always exits 0 and prints nothing.
 [ -n "$TMUX_PANE" ] || exit 0
+
+ppid_of() {  # field 4 of /proc/<pid>/stat, counted after the comm, which may hold spaces
+  awk '{sub(/.*\) /, ""); print $2}' "/proc/$1/stat" 2>/dev/null
+}
+# The Claude process this hook runs for: the nearest ancestor executing the
+# Claude Code binary.
+pid=$PPID
+while [ "${pid:-0}" -gt 1 ]; do
+  case $(readlink "/proc/$pid/exe" 2>/dev/null) in */@anthropic-ai/*) break ;; esac
+  pid=$(ppid_of "$pid")
+done
+[ "${pid:-0}" -gt 1 ] || exit 0
+case $(tr '\0' ' ' < "/proc/$(ppid_of "$pid")/cmdline" 2>/dev/null) in
+  *claude-auto-launch*) ;;
+  *) exit 0 ;;
+esac
+
 dir=/run/claudecode/panes/${TMUX_PANE#%}
 mkdir -p "$dir" 2>/dev/null || exit 0
 sid=$(jq -r '.session_id // empty' 2>/dev/null)

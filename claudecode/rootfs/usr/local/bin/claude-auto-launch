@@ -106,8 +106,10 @@ if [ -n "$AUTO_LAUNCH_ARGS" ]; then
     # this loop dies with the container anyway.
     # claude-update-watcher marks the pane before it sends SIGTERM to move an
     # idle session onto an installed update: relaunch at once, same
-    # conversation, without counting it as a failure.
-    if [ "$rc" -eq 143 ] && [ -n "$TMUX_PANE" ] && rm "$PANE_STATE/restart-for-update" 2>/dev/null; then
+    # conversation, without counting it as a failure. The mark alone decides
+    # (claude exits 143 on SIGTERM today, but nothing else depends on that),
+    # and rm both tests and consumes it.
+    if [ -n "$TMUX_PANE" ] && rm "$PANE_STATE/restart-for-update" 2>/dev/null; then
       AUTO_LAUNCH_ARGS=$(resume_args)
       echo "[INFO] Restarting Claude Code onto the installed update (claude $AUTO_LAUNCH_ARGS)" >&2
       fast_fails=0

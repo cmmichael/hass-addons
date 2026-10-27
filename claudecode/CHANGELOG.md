@@ -21,9 +21,12 @@ All notable changes to this project will be documented in this file.
   window. This needs `apply_claude_updates`; with it off, the relaunch uses
   `--continue` as before.
 - `settings.json` gains three hooks (SessionStart, UserPromptSubmit, Stop) that
-  call `/usr/local/bin/claude-session-hook`. They are removed again when the
-  option is off. Your own hooks are never touched, and Claude Jobs do not load
-  them.
+  call `/usr/local/bin/claude-session-hook`. Existing installs get them at the
+  next start; if you have your own hooks for those events, ours are added
+  beside them and yours keep running. They are removed again when the option
+  is off. Your own hooks are never touched, and Claude Jobs do not load them.
+- A turn waiting on a permission question for an hour counts as idle, so an
+  update restart drops the question; ask again in the resumed conversation.
 
 ## [1.2.65-con.20] - 2026-10-17
 

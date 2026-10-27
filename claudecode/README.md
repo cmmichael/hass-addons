@@ -309,13 +309,13 @@ When `session_persistence` is enabled, the add-on uses tmux to maintain your ter
 
 Claude Code updates itself in the background, but each running session keeps executing the release it started with. On an unattended box nobody restarts it, so the session falls behind indefinitely. With `apply_claude_updates` on, the default, the add-on moves an idle session onto the installed release:
 
-- **When it counts as idle.** No turn is running, and nothing has been printed or typed in the pane for 15 minutes. Hooks in `settings.json` record when each turn starts and ends. An interrupted turn records no end, so a pane quiet for an hour counts as idle anyway.
+- **When it counts as idle.** No turn is running, and nothing has been printed or typed in the pane for 15 minutes. Hooks in `settings.json` record when each turn starts and ends. An interrupted turn records no end, so a pane quiet for an hour counts as idle anyway. A permission question left unanswered for an hour looks the same: it is dropped by the restart, and you ask again in the resumed conversation.
 - **What happens.** The session gets SIGTERM and relaunches straight away on the same conversation, with the same flags. The add-on log says which pane moved and onto which release.
 - **What is left alone.** A release only gets moved onto once it answers `claude --version`, so one that cannot run on this host never takes a working session down. Sessions you started by hand from a shell are left alone too, because nothing would relaunch them.
 
 The same hooks make a crash relaunch resume the pane's own conversation rather than the most recent one in the directory, which matters when several tmux windows run Claude. Claude Jobs never load these hooks.
 
-Needs `session_persistence` and `auto_launch_claude` set to `continue` or `new`. Turning the option off removes the add-on's hooks from `settings.json` at the next start; your own hooks stay.
+Needs `session_persistence` and `auto_launch_claude` set to `continue` or `new`. Existing installs get the three hooks written into `settings.json` at the next start; if you have your own `SessionStart`, `UserPromptSubmit` or `Stop` hooks, ours sit beside them and yours keep running. Turning the option off removes the add-on's hooks at the next start; your own hooks stay.
 
 ### tmux Commands
 
