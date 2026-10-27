@@ -59,7 +59,6 @@ check_login
 # elsewhere, so never a job's).
 PANE_STATE=/run/claudecode/panes/${TMUX_PANE#%}
 TERMINAL_SESSION=/data/claudecode/terminal-session-id
-export CLAUDECODE_TERMINAL=1   # tells claude-session-hook this is the terminal session
 resume_args() {
   local sid proj
   # Claude Code keeps transcripts under projects/<cwd with every

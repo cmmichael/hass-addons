@@ -411,7 +411,8 @@ With `enable_remote_control`, sessions can be driven from `claude.ai/code` or th
 The Claude session is started when the container boots, not when you open the web terminal, so Remote Control is available after a restart without anyone opening the add-on. This requires `session_persistence: true` (tmux holds the session) and `auto_launch_claude` set to `continue` or `new`; opening the web terminal attaches to the running session. Stopping or restarting the add-on sends Claude a SIGTERM and gives it up to 10s to exit before the container goes down. Set `auto_launch_claude: off` if you do not want Claude running unattended.
 
 With `remote_control_server` on, the add-on also runs `claude remote-control` beside the terminal session. `enable_remote_control` lets you steer the one terminal session. The server lets you start new sessions on this box from claude.ai/code or the Claude app:
-- **Where new sessions run.** They work in `/homeassistant`, with `default_permission_mode`.
+- **Where new sessions run.** They work in `/homeassistant` as root, with `default_permission_mode`. With `auto` or `bypassPermissions`, a session started from the app can change your Home Assistant configuration unattended.
+- **Session links.** Each `[rc-server]` session link in the add-on log opens a live session on this box; treat the log accordingly.
 - **What the log shows.** The server reports its connection, the environment link and each session that attaches. Look for lines prefixed `[rc-server]`.
 - **Stops and restarts.** Stopping the add-on stops the server's sessions as gently as the terminal's. With `apply_claude_updates`, the server moves onto Claude Code updates once all its sessions are idle, and they reattach.
 - **Resuming after a restart.** Sessions started this way share the terminal's folder, so with `apply_claude_updates` on the terminal resumes its own last conversation, not the newest one in the folder.

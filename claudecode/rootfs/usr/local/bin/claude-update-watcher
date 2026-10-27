@@ -95,10 +95,16 @@ pane_claude() {  # $1 = pane root pid
 # survive the restart - the server keeps its environment and reattaches them
 # - but a turn in flight would be cut off. claude-session-hook stamps those
 # sessions per Claude process, since they have no tmux pane.
+descendants() {  # $1 = pid -> every descendant pid
+  local kid
+  for kid in $(pgrep -P "$1" 2>/dev/null); do echo "$kid"; descendants "$kid"; done
+}
 server_idle() {  # $1 = server pid
   local kid lp ls started last now
   now=$(date +%s)
-  for kid in $(pgrep -P "$1" 2>/dev/null); do
+  # All descendants, not just children: a release that spawns sessions
+  # through an intermediate process must not look like a server with none.
+  for kid in $(descendants "$1"); do
     case $(readlink "/proc/$kid/exe" 2>/dev/null) in */@anthropic-ai/*) ;; *) continue ;; esac
     lp=$(cat "$PROCS/$kid/last-prompt" 2>/dev/null || echo 0)
     ls=$(cat "$PROCS/$kid/last-stop" 2>/dev/null || echo 0)
@@ -147,10 +153,11 @@ while sleep "$POLL_SECS"; do
   done < <(tmux list-panes -a -F '#{pane_id} #{pane_pid} #{window_activity} #{session_activity}' 2>/dev/null)
 
   rpid=$(cat "$RC_PIDFILE" 2>/dev/null)
+  case $signaled in *" $rpid "*) rpid="" ;; esac
   if [ -n "$rpid" ] && [ -e "/proc/$rpid/exe" ] && ! [ "/proc/$rpid/exe" -ef "$BIN" ] \
      && server_idle "$rpid" && installed_ok && ! [ "/proc/$rpid/exe" -ef "$BIN" ]; then
     info "Restarting the Remote Control server (pid $rpid) onto Claude Code ${INSTALLED_VERSION:-update}; its sessions are idle and reattach"
-    kill -TERM "$rpid" 2>/dev/null
+    kill -TERM "$rpid" 2>/dev/null && signaled="$signaled$rpid "
   fi
   # State of Claude processes that have exited.
   for d in "$PROCS"/*/; do

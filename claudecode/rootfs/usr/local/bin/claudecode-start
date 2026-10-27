@@ -832,9 +832,12 @@ start_update_watcher() {
 # the Claude app (the terminal session's --remote-control only exposes that
 # one session). Spawned sessions are its children: on_stop's stop_sessions
 # reaches them through this loop, and the loop ends once $RUN_DIR/stopping
-# exists. The server repaints its status screen as it changes; the filter
-# passes each distinct line to the log once, so the log shows the connect,
-# the environment URL and every session that attaches, not the repaints.
+# exists. The server repaints its whole status screen about once a second
+# (161 lines in 25 s on a real run). The filter prints a line only when it is
+# new or has been off the screen for over 30 s: steady repaints never reach
+# the log, while a session that detaches and comes back, or an error that
+# recurs, is logged again. (Dropping only consecutive repeats would not help:
+# the repaint is a block of lines, so no line ever follows itself.)
 start_rc_server() {
   [ "$RC_SERVER" = "true" ] || return 0
   if [ "$CLAUDE_OK" != "true" ]; then
@@ -848,7 +851,7 @@ start_rc_server() {
       claude remote-control --permission-mode "$DEFAULT_MODE" \
           --remote-control-session-name-prefix "$RC_PREFIX" < /dev/null \
           > >(sed -u 's/\x1b\]8;;\([^\x1b\x07]*\)\(\x1b\\\|\x07\)/\1 /g; s/\x1b\[[0-9;?]*[A-Za-z]//g' \
-               | awk 'NF && !seen[$0]++ { print "[rc-server] " $0; fflush() }') 2>&1 &
+               | awk 'NF { t = systime(); if (!($0 in seen) || t - seen[$0] > 30) { print "[rc-server] " $0; fflush() }; seen[$0] = t }') 2>&1 &
       echo $! > "$RUN_DIR/rc-server.pid"
       wait $!
       rc=$?
