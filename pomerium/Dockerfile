@@ -9,7 +9,7 @@ ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:bookworm
 # binary out of the pinned official image into the HA Debian base. Debian,
 # not Alpine: the embedded Envoy that pomerium execs at runtime needs glibc
 # (see build.yaml).
-FROM pomerium/pomerium:v0.33.1 AS pomerium
+FROM pomerium/pomerium:v0.33.6 AS pomerium
 
 FROM ${BUILD_FROM}
 

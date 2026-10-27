@@ -55,7 +55,7 @@ Simple enough to keep the flat `run.sh` style rather than `claudecode`'s
 
 Multi-stage Dockerfile:
 
-1. `FROM pomerium/pomerium:v0.33.1 AS pomerium` — the official image, pinned.
+1. `FROM pomerium/pomerium:v0.33.6 AS pomerium` — the official image, pinned.
    It is multi-arch (amd64, arm64v8), so each architecture's local Supervisor
    build pulls the right binary.
 2. `FROM ${BUILD_FROM}` — the HA **Debian** base (from `build.yaml`),
@@ -231,7 +231,7 @@ config is worse than owning the whole file.
   `/addon_config` (rw), and its private `/data`.
 - Generated config is root-only (`0600`) inside the container's private
   `/data` volume.
-- Pinned upstream version (`v0.33.1`); bumping it is an explicit add-on
+- Pinned upstream version (`v0.33.6`); bumping it is an explicit add-on
   release with a changelog entry.
 
 ## Alternatives considered
