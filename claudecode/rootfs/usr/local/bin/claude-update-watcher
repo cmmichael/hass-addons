@@ -38,6 +38,7 @@ warn() { echo "[$(date +%H:%M:%S)] [WARN] $*"; }
 BAD_RETRY_SECS=${CLAUDE_UPDATE_BAD_RETRY_SECS:-600}
 verified=""   # "<key>:ok" or "<key>:bad:<epoch>" for the installed binary last checked
 warned=""     # the key a "does not run here" warning was last logged for
+signaled=" "  # pids already sent SIGTERM: a Claude winding down is not signalled again
 
 # Sets BIN to the installed binary once it is known to run. Fails while an
 # update is mid-install or when the new release does not run here. Not called
@@ -93,6 +94,7 @@ while sleep "$POLL_SECS"; do
       *) continue ;;   # a shell or a claude started by hand: nobody would relaunch it
     esac
     pid=$(pane_claude "$root") || continue
+    case $signaled in *" $pid "*) continue ;; esac
     [ "/proc/$pid/exe" -ef "$BIN" ] && continue   # already on the installed release
     quiet=$(( now - (win_act > sess_act ? win_act : sess_act) ))
     [ "$quiet" -ge "$IDLE_SECS" ] || continue
@@ -112,6 +114,10 @@ while sleep "$POLL_SECS"; do
       continue
     }
     info "Restarting the Claude session in pane $pane (pid $pid, idle ${quiet}s) onto Claude Code ${INSTALLED_VERSION:-update}; it resumes the same conversation"
-    kill -TERM "$pid" 2>/dev/null || rm -f "$state/restart-for-update"   # it exited by itself meanwhile
+    if kill -TERM "$pid" 2>/dev/null; then
+      signaled="$signaled$pid "
+    else
+      rm -f "$state/restart-for-update"   # it exited by itself meanwhile
+    fi
   done < <(tmux list-panes -a -F '#{pane_id} #{pane_pid} #{window_activity} #{session_activity}' 2>/dev/null)
 done
