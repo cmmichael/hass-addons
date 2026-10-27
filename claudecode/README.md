@@ -106,6 +106,7 @@ claude --continue
 | `working_directory` | Start directory | /homeassistant |
 | `session_persistence` | Use tmux for persistent sessions | true |
 | `auto_update_claude` | Auto-update Claude Code on startup (rolls back automatically if the new release cannot run on this host). Writes to the container layer — see changelog 1.2.63-con.10 | false |
+| `apply_claude_updates` | Claude Code installs its own updates in the background, but a running session keeps the old release until it restarts. With this on, an idle session moves onto the installed update by itself and resumes the same conversation. See [Updates to running sessions](#updates-to-running-sessions) | true |
 | `default_permission_mode` | Default Claude Code permission mode: `default`, `auto`, `acceptEdits`, `plan`, or `bypassPermissions`. `auto` uses a classifier to approve/deny prompts (Claude Code v2.1.83+, Max/Team/Enterprise/API plan, Sonnet 4.6+/Opus 4.6+); falls back silently to `default` if requirements aren't met | auto |
 | `auto_launch_claude` | Auto-run Claude when the terminal opens: `off` (bash prompt), `new` (`claude`), or `continue` (`claude --continue`). Drops to a login shell when Claude exits. With `enable_remote_control` on, the session is started at container boot instead (see Remote Control below) | continue |
 | `enable_remote_control` | Turn on [Remote Control](https://code.claude.com/docs/en/remote-control) for all Claude sessions (sets `remoteControlAtStartup` in settings.json and passes `--remote-control` to auto-launches) so you can view and steer sessions from claude.ai/code or the Claude mobile app. Requires Claude Code v2.1.51+, claude.ai OAuth login (not API key), and a Pro/Max/Team/Enterprise plan. See the security note below | false |
@@ -303,6 +304,18 @@ When `session_persistence` is enabled, the add-on uses tmux to maintain your ter
 - You can disconnect and reconnect without losing context
 - Claude Code conversations are preserved
 - With `enable_remote_control` on, the session is created at boot so Remote Control works without a browser
+
+### Updates to running sessions
+
+Claude Code updates itself in the background, but each running session keeps executing the release it started with. On an unattended box nobody restarts it, so the session falls behind indefinitely. With `apply_claude_updates` on, the default, the add-on moves an idle session onto the installed release:
+
+- **When it counts as idle.** No turn is running, and nothing has been printed or typed in the pane for 15 minutes. Hooks in `settings.json` record when each turn starts and ends. An interrupted turn records no end, so a pane quiet for an hour counts as idle anyway. A permission question left unanswered for an hour looks the same: it is dropped by the restart, and you ask again in the resumed conversation.
+- **What happens.** The session gets SIGTERM and relaunches straight away on the same conversation, with the same flags. The add-on log says which pane moved and onto which release.
+- **What is left alone.** A release only gets moved onto once it answers `claude --version`, so one that cannot run on this host never takes a working session down. Sessions you started by hand from a shell are left alone too, because nothing would relaunch them.
+
+The same hooks make a crash relaunch resume the pane's own conversation rather than the most recent one in the directory, which matters when several tmux windows run Claude. Claude Jobs never load these hooks.
+
+Needs `session_persistence` and `auto_launch_claude` set to `continue` or `new`. Existing installs get the three hooks written into `settings.json` at the next start; if you have your own `SessionStart`, `UserPromptSubmit` or `Stop` hooks, ours sit beside them and yours keep running. Turning the option off removes the add-on's hooks at the next start; your own hooks stay.
 
 ### tmux Commands
 

@@ -42,6 +42,14 @@ configuration:
     description: >-
       Automatically check for and install Claude Code updates on add-on startup.
       Keeps Claude Code current without requiring add-on version bumps.
+  apply_claude_updates:
+    name: Apply Claude Code updates
+    description: >-
+      Claude Code installs its own updates in the background, but a running
+      session keeps the old release until it restarts. With this on, an idle
+      session (no turn running, nothing printed or typed for 15 minutes) is
+      restarted onto the installed update and resumes the same conversation.
+      Needs session persistence and auto-launch.
   enable_remote_control:
     name: Enable Remote Control
     description: >-

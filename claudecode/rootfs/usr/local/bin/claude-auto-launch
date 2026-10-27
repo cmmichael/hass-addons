@@ -49,6 +49,26 @@ check_login() {
 }
 check_login
 
+# The conversation to come back to after a relaunch. claude-session-hook
+# records, per tmux pane, the session this pane's claude was on (while
+# apply_claude_updates is on). Resume exactly that one when its transcript is
+# on disk; otherwise fall back to --continue, the most recent conversation in
+# this directory, which can be another pane's (Claude Jobs keep their
+# transcripts elsewhere, so it is never a job's).
+PANE_STATE=/run/claudecode/panes/${TMUX_PANE#%}
+resume_args() {
+  local sid proj
+  [ -n "$TMUX_PANE" ] && sid=$(cat "$PANE_STATE/session-id" 2>/dev/null)
+  # Claude Code keeps transcripts under projects/<cwd with every
+  # non-alphanumeric character turned into "-">.
+  proj=$(pwd | sed 's/[^A-Za-z0-9]/-/g')
+  if [[ "$sid" =~ ^[0-9A-Fa-f-]{36}$ ]] && [ -f "/root/.claude/projects/$proj/$sid.jsonl" ]; then
+    echo "--resume $sid $CLAUDE_FLAGS"
+  else
+    echo "--continue $CLAUDE_FLAGS"
+  fi
+}
+
 # Supervise claude instead of running it once.
 #
 # Previously a single `claude $AUTO_LAUNCH_ARGS` fell straight through to the
@@ -84,6 +104,19 @@ if [ -n "$AUTO_LAUNCH_ARGS" ]; then
     # else is a crash. 137 (SIGKILL) is deliberately NOT here: an OOM kill is
     # exactly the case worth recovering from, and during a real container kill
     # this loop dies with the container anyway.
+    # claude-update-watcher marks the pane before it sends SIGTERM to move an
+    # idle session onto an installed update: relaunch at once, same
+    # conversation, without counting it as a failure. The mark alone decides
+    # (claude exits 143 on SIGTERM today, but nothing else depends on that),
+    # and rm both tests and consumes it.
+    if [ -n "$TMUX_PANE" ] && rm "$PANE_STATE/restart-for-update" 2>/dev/null; then
+      AUTO_LAUNCH_ARGS=$(resume_args)
+      echo "[INFO] Restarting Claude Code onto the installed update (claude $AUTO_LAUNCH_ARGS)" >&2
+      fast_fails=0
+      backoff=2
+      check_login
+      continue
+    fi
     case $rc in
       0|129|130|143) break ;;
     esac
@@ -112,7 +145,7 @@ if [ -n "$AUTO_LAUNCH_ARGS" ]; then
     [ "$backoff" -lt 60 ] && backoff=$((backoff * 2))
     # Always resume after an unexpected exit, even when auto_launch_claude is
     # "new" — the conversation that died is the one worth getting back.
-    AUTO_LAUNCH_ARGS="--continue $CLAUDE_FLAGS"
+    AUTO_LAUNCH_ARGS=$(resume_args)
     # The token may have lapsed since the last launch; say so before relaunching
     # into a prompt Remote Control cannot answer.
     check_login

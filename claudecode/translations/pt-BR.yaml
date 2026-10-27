@@ -44,6 +44,14 @@ configuration:
     description: >-
       Verifica e instala automaticamente atualizações do Claude Code ao iniciar o add-on.
       Mantém o Claude Code atualizado sem precisar atualizar a versão do add-on.
+  apply_claude_updates:
+    name: Aplicar atualizações do Claude Code
+    description: >-
+      O Claude Code instala as próprias atualizações em segundo plano, mas uma
+      sessão em execução continua na versão antiga até reiniciar. Com esta
+      opção, uma sessão ociosa (sem turno em andamento e sem atividade por 15
+      minutos) é reiniciada na atualização instalada e retoma a mesma conversa.
+      Requer persistência de sessão e inicialização automática.
   enable_remote_control:
     name: Habilitar Controle Remoto
     description: >-
