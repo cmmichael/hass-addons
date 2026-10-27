@@ -159,6 +159,9 @@ while sleep "$POLL_SECS"; do
     info "Restarting the Remote Control server (pid $rpid) onto Claude Code ${INSTALLED_VERSION:-update}; its sessions are idle and reattach"
     kill -TERM "$rpid" 2>/dev/null && signaled="$signaled$rpid "
   fi
+  # Forget pids that have exited, so a later Claude the kernel hands the same
+  # pid is not mistaken for one already signalled and left on an old release.
+  for p in $signaled; do [ -e "/proc/$p" ] || signaled=${signaled/ $p / }; done
   # State of Claude processes that have exited.
   for d in "$PROCS"/*/; do
     [ -d "$d" ] || continue
