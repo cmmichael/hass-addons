@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.28] - 2026-10-28
+
+### Fixed
+- **Remote Control server restarts after an update no longer look like a
+  failure.** When the update watcher moved the server onto a new Claude Code
+  release, the server waited 30 s and logged "Remote Control server exited (0);
+  restarting in 30s (run /login in the terminal if this repeats)": the loop
+  took only exit status 143 as the watcher's restart, and `claude remote-control`
+  (2.1.312) exits 0 on SIGTERM. The watcher now marks the restart before
+  signalling the server, and the loop restarts it after 2 s whenever the mark
+  is there. A crash or a logged-out server still takes the 30 s path with the
+  hint. Found on claude-code-web (iris), fixed there in 366a4a8.
+
 ## [1.2.65-con.27] - 2026-10-28
 
 ### Added

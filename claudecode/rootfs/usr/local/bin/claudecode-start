@@ -1030,6 +1030,7 @@ start_rc_server() {
   cd_work
   (
     trap - INT QUIT
+    rm -f "$RUN_DIR/rc-restart"   # left by a watcher that was stopped mid-restart
     while [ ! -e "$RUN_DIR/stopping" ]; do
       claude remote-control --permission-mode "$DEFAULT_MODE" \
           --remote-control-session-name-prefix "$RC_PREFIX" < /dev/null \
@@ -1040,8 +1041,12 @@ start_rc_server() {
       rc=$?
       rm -f "$RUN_DIR/rc-server.pid"
       [ -e "$RUN_DIR/stopping" ] && break
-      if [ "$rc" -eq 143 ]; then
-        sleep 2   # claude-update-watcher moved it onto an update
+      # claude-update-watcher moved it onto an update. It marks the restart
+      # first: the server exits 0 on SIGTERM (2.1.312), 143 only on releases
+      # that let the signal kill them.
+      if [ -e "$RUN_DIR/rc-restart" ] || [ "$rc" -eq 143 ]; then
+        rm -f "$RUN_DIR/rc-restart"
+        sleep 2
       else
         echo "[$(date +%H:%M:%S)] [WARN] Remote Control server exited ($rc); restarting in 30s (run /login in the terminal if this repeats)"
         sleep 30
