@@ -2,9 +2,9 @@
 # claude-session-hook start|prompt|stop
 #
 # A Claude Code hook (SessionStart, UserPromptSubmit, Stop), written into
-# settings.json by claudecode-start while apply_claude_updates is on. For each
-# tmux pane it records which conversation the pane's Claude is on and whether
-# a turn is in flight:
+# settings.json by claudecode-start while apply_claude_updates is on. For the
+# terminal session in each tmux pane it records which conversation the pane's
+# Claude is on and whether a turn is in flight:
 #
 #   /run/claudecode/panes/<pane number>/session-id    the conversation
 #   /run/claudecode/panes/<pane number>/last-prompt   epoch of the last prompt
@@ -12,22 +12,44 @@
 #
 # claude-update-watcher reads these to restart only idle sessions, and
 # claude-auto-launch reads the session id to resume the pane's own
-# conversation instead of whichever one `--continue` would pick.
+# conversation instead of whichever one `--continue` would pick. The terminal
+# session also leaves its conversation in /data/claudecode/terminal-session-id,
+# so the next boot resumes it rather than the newest conversation in the
+# directory, which may be one started from the app.
 #
-# Only the claude that claude-auto-launch started counts: the hook finds the
-# Claude process it runs for and checks that its parent is the launcher. A
-# `claude -p` typed in the pane's shell after /exit, or one Claude runs as a
-# tool, inherits TMUX_PANE but would otherwise overwrite the pane's
-# conversation with its own one-off.
+# Only the claude that claude-auto-launch started counts as the terminal
+# session: the hook finds the Claude process it runs for and checks that its
+# parent is the launcher. A `claude -p` typed in the pane's shell after /exit,
+# or one Claude runs as a tool, inherits TMUX_PANE but would otherwise
+# overwrite the pane's conversation with its own one-off.
 #
-# Outside tmux it does nothing; Claude Jobs never load these hooks at all
-# (they run with --setting-sources ""). It must never get in Claude's way, so
-# it always exits 0 and prints nothing.
-[ -n "$TMUX_PANE" ] || exit 0
+# Sessions outside tmux - the ones the Remote Control server spawns - have no
+# pane, so their turns are stamped per Claude process instead:
+#
+#   /run/claudecode/procs/<claude pid>/last-prompt, last-stop
+#
+# which tells the watcher when every session under the server is idle.
+#
+# Claude Jobs never load these hooks (they run with --setting-sources ""). It
+# must never get in Claude's way, so it always exits 0 and prints nothing.
+EVENT=${1:-}
+sid=$(jq -r '.session_id // empty' 2>/dev/null)
+[[ "$sid" =~ ^[0-9A-Fa-f-]{36}$ ]] || sid=""
 
 ppid_of() {  # field 4 of /proc/<pid>/stat, counted after the comm, which may hold spaces
   awk '{sub(/.*\) /, ""); print $2}' "/proc/$1/stat" 2>/dev/null
 }
+stamp() {  # $1 = state dir
+  mkdir -p "$1" 2>/dev/null || return 0
+  case "$EVENT" in
+    prompt) date +%s > "$1/last-prompt" 2>/dev/null ;;
+    stop)   date +%s > "$1/last-stop" 2>/dev/null ;;
+  esac
+}
+put() {  # $1 = file, $2 = value; atomic within its directory
+  printf '%s\n' "$2" > "$1.tmp" 2>/dev/null && mv -f "$1.tmp" "$1" 2>/dev/null
+}
+
 # The Claude process this hook runs for: the nearest ancestor executing the
 # Claude Code binary.
 pid=$PPID
@@ -36,19 +58,19 @@ while [ "${pid:-0}" -gt 1 ]; do
   pid=$(ppid_of "$pid")
 done
 [ "${pid:-0}" -gt 1 ] || exit 0
-case $(tr '\0' ' ' < "/proc/$(ppid_of "$pid")/cmdline" 2>/dev/null) in
-  *claude-auto-launch*) ;;
-  *) exit 0 ;;
-esac
 
-dir=/run/claudecode/panes/${TMUX_PANE#%}
-mkdir -p "$dir" 2>/dev/null || exit 0
-sid=$(jq -r '.session_id // empty' 2>/dev/null)
-if [[ "$sid" =~ ^[0-9A-Fa-f-]{36}$ ]]; then
-  printf '%s\n' "$sid" > "$dir/session-id.tmp" 2>/dev/null && mv -f "$dir/session-id.tmp" "$dir/session-id" 2>/dev/null
+if [ -n "$TMUX_PANE" ]; then
+  case $(tr '\0' ' ' < "/proc/$(ppid_of "$pid")/cmdline" 2>/dev/null) in
+    *claude-auto-launch*) ;;
+    *) exit 0 ;;
+  esac
+  dir=/run/claudecode/panes/${TMUX_PANE#%}
+  stamp "$dir"
+  if [ -n "$sid" ]; then
+    put "$dir/session-id" "$sid"
+    mkdir -p /data/claudecode 2>/dev/null && put /data/claudecode/terminal-session-id "$sid"
+  fi
+else
+  stamp "/run/claudecode/procs/$pid"
 fi
-case "${1:-}" in
-  prompt) date +%s > "$dir/last-prompt" 2>/dev/null ;;
-  stop)   date +%s > "$dir/last-stop" 2>/dev/null ;;
-esac
 exit 0

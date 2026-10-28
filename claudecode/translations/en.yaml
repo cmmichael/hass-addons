@@ -66,6 +66,14 @@ configuration:
       and the Claude mobile app. Defaults to "HomeAssistant", producing names like
       "HomeAssistant-graceful-unicorn". Only applies when Enable Remote Control is on.
 
+  remote_control_server:
+    name: Remote Control server
+    description: >-
+      Also run a Claude Code Remote Control server, so you can start new
+      sessions on this box from claude.ai/code or the Claude app, not only
+      steer the terminal session. Needs a claude.ai login (not an API key)
+      and a Pro, Max, Team or Enterprise plan. New sessions work in
+      /homeassistant with the default permission mode.
   job_default_model:
     name: Default model for scheduled jobs
     description: >-

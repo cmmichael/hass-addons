@@ -49,25 +49,32 @@ check_login() {
 }
 check_login
 
-# The conversation to come back to after a relaunch. claude-session-hook
-# records, per tmux pane, the session this pane's claude was on (while
-# apply_claude_updates is on). Resume exactly that one when its transcript is
-# on disk; otherwise fall back to --continue, the most recent conversation in
-# this directory, which can be another pane's (Claude Jobs keep their
-# transcripts elsewhere, so it is never a job's).
+# The conversation to come back to. claude-session-hook records, per tmux
+# pane, the session this pane's claude was on, and the terminal's latest one
+# across restarts (while apply_claude_updates is on). Resume the pane's own
+# conversation, else the terminal's last one, when its transcript is on disk;
+# otherwise fall back to --continue, the most recent conversation in this
+# directory - which can be another pane's, or one started from claude.ai
+# through the Remote Control server (Claude Jobs keep their transcripts
+# elsewhere, so never a job's).
 PANE_STATE=/run/claudecode/panes/${TMUX_PANE#%}
+TERMINAL_SESSION=/data/claudecode/terminal-session-id
 resume_args() {
   local sid proj
-  [ -n "$TMUX_PANE" ] && sid=$(cat "$PANE_STATE/session-id" 2>/dev/null)
   # Claude Code keeps transcripts under projects/<cwd with every
   # non-alphanumeric character turned into "-">.
   proj=$(pwd | sed 's/[^A-Za-z0-9]/-/g')
-  if [[ "$sid" =~ ^[0-9A-Fa-f-]{36}$ ]] && [ -f "/root/.claude/projects/$proj/$sid.jsonl" ]; then
-    echo "--resume $sid $CLAUDE_FLAGS"
-  else
-    echo "--continue $CLAUDE_FLAGS"
-  fi
+  for sid in "$([ -n "$TMUX_PANE" ] && cat "$PANE_STATE/session-id" 2>/dev/null)" \
+             "$(cat "$TERMINAL_SESSION" 2>/dev/null)"; do
+    if [[ "$sid" =~ ^[0-9A-Fa-f-]{36}$ ]] && [ -f "/root/.claude/projects/$proj/$sid.jsonl" ]; then
+      echo "--resume $sid $CLAUDE_FLAGS"
+      return
+    fi
+  done
+  echo "--continue $CLAUDE_FLAGS"
 }
+# auto_launch_claude: continue means "the conversation this terminal was on".
+case "$AUTO_LAUNCH_ARGS" in --continue*) AUTO_LAUNCH_ARGS=$(resume_args) ;; esac
 
 # Supervise claude instead of running it once.
 #

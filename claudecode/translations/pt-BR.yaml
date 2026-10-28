@@ -70,6 +70,14 @@ configuration:
       "HomeAssistant", produzindo nomes como "HomeAssistant-graceful-unicorn".
       Aplica-se apenas quando o Controle Remoto está habilitado.
 
+  remote_control_server:
+    name: Servidor de Remote Control
+    description: >-
+      Executa também um servidor de Remote Control do Claude Code, para iniciar
+      novas sessões nesta máquina pelo claude.ai/code ou pelo app Claude, e não
+      só controlar a sessão do terminal. Requer login no claude.ai (não uma
+      chave de API) e um plano Pro, Max, Team ou Enterprise. As novas sessões
+      trabalham em /homeassistant com o modo de permissão padrão.
   job_default_model:
     name: Modelo padrão para jobs agendados
     description: >-

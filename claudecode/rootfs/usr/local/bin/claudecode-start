@@ -78,6 +78,7 @@ JOB_LIB=/usr/local/lib/claude-job
 PANE_STATE_DIR=$RUN_DIR/panes
 SESSION_HOOK=/usr/local/bin/claude-session-hook
 UPDATE_WATCHER_PID=""
+RC_SERVER_LOOP_PID=""
 
 cd_work() { cd /homeassistant 2>/dev/null || cd /; }
 
@@ -139,7 +140,7 @@ stop_sessions() {
   # A pending update restart would make claude-auto-launch relaunch the
   # Claude we are about to stop.
   rm -f "$PANE_STATE_DIR"/*/restart-for-update 2>/dev/null
-  for root in $(tmux list-panes -a -F '#{pane_pid}' 2>/dev/null) \
+  for root in $(tmux list-panes -a -F '#{pane_pid}' 2>/dev/null) $RC_SERVER_LOOP_PID \
               $([ -n "$TTYD_PID" ] && pgrep -P "$TTYD_PID" 2>/dev/null); do
     pids="$pids $(descendants "$root")"
   done
@@ -351,6 +352,7 @@ read_options() {
   DEFAULT_MODE=$(opt '.default_permission_mode // "auto"')
   ENABLE_RC=$(opt '.enable_remote_control // false')
   RC_PREFIX=$(opt '.remote_control_session_prefix // "HomeAssistant"')
+  RC_SERVER=$(opt '.remote_control_server // false')
   AUTO_LAUNCH=$(opt '.auto_launch_claude // "continue"')
   EXTRA_PKGS=$(opt '.extra_npm_packages // [] | join(" ")')
   JOB_DEFAULT_MODEL=$(opt '.job_default_model // "opus"')
@@ -361,7 +363,7 @@ read_options() {
   # Sane fallbacks if options.json itself was unreadable.
   : "${FONT_SIZE:=14}" "${THEME:=dark}" "${SESSION_PERSIST:=true}" "${ENABLE_MCP:=true}"
   : "${ENABLE_PLAYWRIGHT:=false}" "${AUTO_UPDATE:=false}" "${APPLY_UPDATES:=true}" "${DEFAULT_MODE:=auto}"
-  : "${ENABLE_RC:=false}" "${RC_PREFIX:=HomeAssistant}" "${AUTO_LAUNCH:=continue}"
+  : "${ENABLE_RC:=false}" "${RC_PREFIX:=HomeAssistant}" "${RC_SERVER:=false}" "${AUTO_LAUNCH:=continue}"
   : "${JOB_DEFAULT_MODEL:=opus}" "${ENABLE_JOBS:=false}" "${ENABLE_USAGE:=true}" "${USAGE_INTERVAL:=300}"
 }
 
@@ -545,6 +547,9 @@ apply_session_hooks() {
     APPLY_UPDATES=false
   fi
   mkdir -p "$PANE_STATE_DIR" 2>/dev/null
+  # Without the hooks nothing keeps this current; a stale one would steer
+  # every boot's resume.
+  [ "$APPLY_UPDATES" = "true" ] || rm -f /data/claudecode/terminal-session-id
 }
 
 # ---------------------------------------------------------------------------
@@ -811,19 +816,64 @@ prestart_session() {
 # sessions under tmux that claude-auto-launch supervises can be relaunched.
 start_update_watcher() {
   [ "$APPLY_UPDATES" = "true" ] || return 0
-  [ "$SESSION_PERSIST" = "true" ] && [ "$AUTO_LAUNCH" != "off" ] || {
+  # Terminal sessions it can move need tmux and claude-auto-launch; the Remote
+  # Control server it can always move.
+  if ! { [ "$SESSION_PERSIST" = "true" ] && [ "$AUTO_LAUNCH" != "off" ]; } && [ "$RC_SERVER" != "true" ]; then
     info "apply_claude_updates needs session_persistence and auto_launch_claude; idle update restarts are off"
     return 0
-  }
+  fi
   ( trap - INT QUIT; exec /usr/local/bin/claude-update-watcher ) &
   UPDATE_WATCHER_PID=$!
   info "Idle sessions move onto Claude Code updates after ${CLAUDE_UPDATE_IDLE_SECS:-900}s without activity"
+}
+
+# remote_control_server: `claude remote-control` runs beside the terminal
+# session, so new sessions can be started on this box from claude.ai/code or
+# the Claude app (the terminal session's --remote-control only exposes that
+# one session). Spawned sessions are its children: on_stop's stop_sessions
+# reaches them through this loop, and the loop ends once $RUN_DIR/stopping
+# exists. The server repaints its whole status screen about once a second
+# (161 lines in 25 s on a real run). The filter prints a line only when it is
+# new or has been off the screen for over 30 s: steady repaints never reach
+# the log, while a session that detaches and comes back, or an error that
+# recurs, is logged again. (Dropping only consecutive repeats would not help:
+# the repaint is a block of lines, so no line ever follows itself.)
+start_rc_server() {
+  [ "$RC_SERVER" = "true" ] || return 0
+  if [ "$CLAUDE_OK" != "true" ]; then
+    warn "remote_control_server is on but the claude CLI does not run here; not starting it"
+    return 0
+  fi
+  cd_work
+  (
+    trap - INT QUIT
+    while [ ! -e "$RUN_DIR/stopping" ]; do
+      claude remote-control --permission-mode "$DEFAULT_MODE" \
+          --remote-control-session-name-prefix "$RC_PREFIX" < /dev/null \
+          > >(sed -u 's/\x1b\]8;;\([^\x1b\x07]*\)\(\x1b\\\|\x07\)/\1 /g; s/\x1b\[[0-9;?]*[A-Za-z]//g' \
+               | awk 'NF { t = systime(); if (!($0 in seen) || t - seen[$0] > 30) { print "[rc-server] " $0; fflush() }; seen[$0] = t }') 2>&1 &
+      echo $! > "$RUN_DIR/rc-server.pid"
+      wait $!
+      rc=$?
+      rm -f "$RUN_DIR/rc-server.pid"
+      [ -e "$RUN_DIR/stopping" ] && break
+      if [ "$rc" -eq 143 ]; then
+        sleep 2   # claude-update-watcher moved it onto an update
+      else
+        echo "[$(date +%H:%M:%S)] [WARN] Remote Control server exited ($rc); restarting in 30s (run /login in the terminal if this repeats)"
+        sleep 30
+      fi
+    done
+  ) &
+  RC_SERVER_LOOP_PID=$!
+  info "Remote Control server started: start new sessions on this box from claude.ai/code or the Claude app"
 }
 
 run_step "build terminal command" build_shell_cmd
 run_step "pre-start Claude session" prestart_session
 run_step "start job endpoint" start_job_endpoint
 run_step "start update watcher" start_update_watcher
+run_step "start Remote Control server" start_rc_server
 
 trap - EXIT
 CURRENT_STEP="web terminal (ttyd)"
