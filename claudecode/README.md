@@ -315,7 +315,7 @@ When `session_persistence` is enabled, the add-on uses tmux to maintain your ter
 - **While running.** Claude Code updates itself in the background on the chosen channel.
 - **Across restarts.** Every restart recreates the container, which used to throw that update away. Now the add-on remembers the release in use and reinstalls it at the next start from npm's cache in `/data/npm-cache`, without the network. That takes a few seconds. A release that does not run after the restart is rolled back to the image's release and not tried again. The add-on log shows each step.
 - **Changing the channel.** The next start drops the remembered release and starts from the image's release; Claude Code then follows the new channel.
-- **The cache.** It keeps only the packages of the release in use (about 130 MB) and is left out of Home Assistant backups. Claude Code itself still runs from the container, not from `/data`, and the AppArmor profile is unchanged. `npx` keeps the packages it runs in the same cache; the add-on clears that area at every start, so as before nothing `npx` fetched outlives a restart.
+- **The cache.** It keeps only the packages of the release in use (about 130 MB) and is left out of Home Assistant backups. Claude Code itself still runs from the container, not from `/data`, and the AppArmor profile is unchanged. `npx` keeps the packages it runs in the same cache; the add-on clears that area at every start, so as before nothing `npx` fetched outlives a restart. Anything else npm cached, such as `extra_npm_packages`, is dropped at the next start once it is more than 30 days old, and fetched again when needed.
 
 ### Updates to running sessions
 

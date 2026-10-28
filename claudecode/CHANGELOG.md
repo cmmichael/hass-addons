@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.25] - 2026-10-28
+
+### Changed
+- The npm cache on `/data` (con.24) is image-wide, so packages other than
+  Claude Code, such as `extra_npm_packages` or anything installed with npm
+  in the terminal, accumulated there with nothing removing them. The start-up
+  prune now also drops every cache entry older than 30 days, except the
+  Claude Code release in use. A dropped package is fetched again when next
+  needed. Follow-up to the review of #50.
+
 ## [1.2.65-con.24] - 2026-10-28
 
 ### Added
