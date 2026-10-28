@@ -1030,18 +1030,25 @@ start_rc_server() {
   cd_work
   (
     trap - INT QUIT
+    rm -f "$RUN_DIR/rc-restart"   # left by a watcher that was stopped mid-restart
     while [ ! -e "$RUN_DIR/stopping" ]; do
       claude remote-control --permission-mode "$DEFAULT_MODE" \
           --remote-control-session-name-prefix "$RC_PREFIX" < /dev/null \
           > >(sed -u 's/\x1b\]8;;\([^\x1b\x07]*\)\(\x1b\\\|\x07\)/\1 /g; s/\x1b\[[0-9;?]*[A-Za-z]//g' \
                | awk 'NF { t = systime(); if (!($0 in seen) || t - seen[$0] > 30) { print "[rc-server] " $0; fflush() }; seen[$0] = t }') 2>&1 &
-      echo $! > "$RUN_DIR/rc-server.pid"
-      wait $!
+      pid=$!
+      echo "$pid" > "$RUN_DIR/rc-server.pid"
+      wait "$pid"
       rc=$?
       rm -f "$RUN_DIR/rc-server.pid"
       [ -e "$RUN_DIR/stopping" ] && break
-      if [ "$rc" -eq 143 ]; then
-        sleep 2   # claude-update-watcher moved it onto an update
+      # claude-update-watcher moved it onto an update. It writes the server's
+      # pid to the mark first: the server exits 0 on SIGTERM (2.1.312), 143 only
+      # on releases that let the signal kill them. A mark for another pid is stale.
+      mark=$(cat "$RUN_DIR/rc-restart" 2>/dev/null)
+      rm -f "$RUN_DIR/rc-restart"
+      if [ "$mark" = "$pid" ] || [ "$rc" -eq 143 ]; then
+        sleep 2
       else
         echo "[$(date +%H:%M:%S)] [WARN] Remote Control server exited ($rc); restarting in 30s (run /login in the terminal if this repeats)"
         sleep 30
