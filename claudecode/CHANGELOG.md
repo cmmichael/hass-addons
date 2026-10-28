@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.23] - 2026-10-28
+
+### Fixed
+- The session hook from 1.2.65-con.21 could take a one-off `claude -p` for the
+  terminal session, when it ran under a shell whose command happened to mention
+  `claude-auto-launch`. That one-off then replaced the conversation the pane
+  resumes after an update or a crash, and the one the next boot resumes. The
+  hook now accepts only a Claude started by the launcher itself.
+
 ## [1.2.65-con.22] - 2026-10-27
 
 ### Added
