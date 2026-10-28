@@ -10,6 +10,7 @@ import fcntl
 import http.client
 import json
 import os
+import shutil
 import signal
 import socket
 import stat
@@ -228,7 +229,7 @@ class TestHTTP(EndpointCase):
 
     # -- auth --
     def test_401_matrix(self):
-        routes = [("GET", "/jobs"), ("GET", "/usage"), ("GET", "/jobs/health-check/detail"), ("POST", "/jobs/no-limit/run"),
+        routes = [("GET", "/jobs"), ("GET", "/usage"), ("GET", "/sessions"), ("GET", "/jobs/health-check/detail"), ("POST", "/jobs/no-limit/run"),
                   ("POST", "/jobs/no-limit/enable"), ("POST", "/jobs/no-limit/disable"),
                   ("POST", "/republish"), ("POST", "/action")]
         for method, path in routes:
@@ -493,6 +494,70 @@ class TestHTTP(EndpointCase):
             self.assertEqual((status, body), (200, {"republished": 0, "failed": n_states + 1}))
         finally:
             self.sup.unroute("POST", "/core/api/states/")
+
+    def test_sessions_route_lists_the_remote_control_servers_live_children(self):
+        """remote_control_server off -> "off"; on without a live server pid -> "stopped"; on with one
+        -> only the hook-stamped, prompted pids descending from that server, busy while a prompt has no stop."""
+        opts = json.loads(self.s.options_file.read_text())
+        procs = self.s.run_dir / "procs"
+        kids, grandchild = [], None
+        try:
+            self.assertEqual(self.get("/sessions"), (200, {"server": "off", "server_pid": None, "count": 0,
+                                                           "busy": 0, "sessions": []}))
+            self.s.options_file.write_text(json.dumps(dict(opts, remote_control_server=True)))
+            self.assertEqual(self.get("/sessions")[1]["server"], "stopped")
+            # this test process plays the server; its children play the sessions it spawned
+            (self.s.run_dir / "rc-server.pid").write_text(f"{os.getpid()}\n")
+            for sid in ("cse_busy", "cse_idle"):
+                kids.append(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
+                                              "--print", "--session-id", sid]))
+            # a session one process further down (an intermediate parent), and the server's pre-created
+            # session, which has never taken a prompt
+            gc_file = self.s.run_dir / "grandchild.pid"
+            kids.append(subprocess.Popen([sys.executable, "-c",
+                                          "import subprocess, sys, time; k = subprocess.Popen([sys.executable, '-c', "
+                                          "'import time; time.sleep(60)', '--print', '--session-id', 'cse_deep']); "
+                                          f"open({str(gc_file)!r}, 'w').write(str(k.pid)); k.wait()"]))
+            kids.append(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
+                                          "--print", "--session-id", "cse_fresh"]))
+            for _ in range(100):
+                if gc_file.exists() and gc_file.read_text():
+                    break
+                time.sleep(0.05)
+            grandchild = int(gc_file.read_text())
+            now = int(time.time())
+            for pid, (lp, ls) in zip((kids[0].pid, kids[1].pid, grandchild, kids[3].pid),
+                                     ((now - 5, now - 60), (now - 120, now - 100), (now - 30, now - 20), (None, None))):
+                (procs / str(pid)).mkdir(parents=True)
+                for name, value in (("last-prompt", lp), ("last-stop", ls)):
+                    if value is not None:
+                        (procs / str(pid) / name).write_text(f"{value}\n")
+            (procs / "1").mkdir()                     # alive, but not the server's child
+            (procs / "999999999").mkdir()             # exited
+            status, snap = self.get("/sessions")
+            self.assertEqual((status, snap["server"], snap["server_pid"], snap["count"], snap["busy"]),
+                             (200, "running", os.getpid(), 3, 1))
+            by_id = {x["id"]: x for x in snap["sessions"]}
+            self.assertEqual((by_id["cse_busy"]["state"], by_id["cse_idle"]["state"], by_id["cse_deep"]["state"]),
+                             ("busy", "idle", "idle"))
+            self.assertNotIn("cse_fresh", by_id)
+            self.assertEqual((by_id["cse_idle"]["last_prompt"], by_id["cse_idle"]["last_stop"]), (now - 120, now - 100))
+            self.assertLessEqual(abs(by_id["cse_idle"]["started"] - now), 5)
+            # unchanged between polls while nothing happens: the sensor's attributes stay put
+            self.assertEqual(self.get("/sessions")[1], snap)
+        finally:
+            for kid in kids:
+                kid.kill()
+                kid.wait()
+            if grandchild:
+                try:
+                    os.kill(grandchild, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            self.s.options_file.write_text(json.dumps(opts))
+            shutil.rmtree(procs, ignore_errors=True)
+            (self.s.run_dir / "rc-server.pid").unlink(missing_ok=True)
+            (self.s.run_dir / "grandchild.pid").unlink(missing_ok=True)
 
     # -- logging --
     def test_usage_route_serves_the_snapshot_and_polls_lazily_without_the_tick(self):

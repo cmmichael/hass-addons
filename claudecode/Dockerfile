@@ -37,6 +37,7 @@ RUN node /ttyd-client/inject-wasm-shim.js /ttyd/html/dist/inline.html /ttyd-clie
 # A gear in the terminal's top right corner opens the add-on's Configuration
 # tab in Home Assistant (/config/app/<slug>/config); see settings-button.html.
 RUN node /ttyd-client/inject-snippet.js /ttyd/html/dist/inline.html /ttyd-client/settings-button.html
+RUN node /ttyd-client/inject-snippet.js /ttyd/html/dist/inline.html /ttyd-client/sessions-badge.html
 
 FROM ${BUILD_FROM}
 
