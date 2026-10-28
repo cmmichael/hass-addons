@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.26] - 2026-10-28
+
+### Fixed
+- Three options showed in the add-on's Configuration tab as bare key names
+  with no explanation: `default_permission_mode`, `auto_launch_claude` and
+  `extra_npm_packages`. They now have a name and a description in all four
+  languages, like every other option.
+
 ## [1.2.65-con.25] - 2026-10-28
 
 ### Changed

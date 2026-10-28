@@ -61,6 +61,27 @@ configuration:
       Se aplica a las actualizaciones en segundo plano de Claude Code, a la
       actualización al arrancar (auto_update_claude) y a la versión que se
       recupera tras un reinicio.
+  default_permission_mode:
+    name: Modo de permisos predeterminado
+    description: >-
+      Lo que Claude Code puede hacer sin preguntar. auto deja que un clasificador
+      apruebe o rechace cada solicitud (requiere un plan Max, Team, Enterprise o
+      API; si no, vuelve a default). default pregunta siempre, acceptEdits
+      aprueba las ediciones de archivos, plan solo planifica y
+      bypassPermissions lo aprueba todo.
+  auto_launch_claude:
+    name: Iniciar Claude automáticamente
+    description: >-
+      Lo que ejecuta el terminal web. continue retoma la última conversación,
+      new empieza una nueva y off da un intérprete de comandos. Con Remote
+      Control activado, la sesión se inicia al arrancar el add-on, sin esperar
+      a un navegador.
+  extra_npm_packages:
+    name: Paquetes npm adicionales
+    description: >-
+      Paquetes npm, como servidores MCP, que se instalan en cada inicio en una
+      carpeta persistente del volumen de Home Assistant, por lo que sobreviven a
+      las actualizaciones del add-on. Sus comandos están en el PATH.
   enable_remote_control:
     name: Habilitar Control Remoto
     description: >-
