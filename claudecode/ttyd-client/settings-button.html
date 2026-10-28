@@ -1,0 +1,34 @@
+<!-- Settings button (injected by inject-snippet.js). The terminal is shown in
+Home Assistant's sidebar panel, whose address is the add-on's slug
+(/d7e97e69_claudecode); the add-on's options are on its Configuration tab,
+/config/app/<slug>/config. A small gear in the top right corner takes the
+Home Assistant window there with the frontend's own navigation (pushState plus
+its location-changed event), so Back returns to the terminal. The page reads
+the slug from the panel's address; outside a panel (the ingress URL opened in
+a tab of its own) there is no Home Assistant window to steer, and the gear
+stays hidden. -->
+<style>
+  #ha-addon-settings { position: fixed; top: 6px; right: 18px; z-index: 10; width: 30px; height: 30px; padding: 5px;
+    border: 0; border-radius: 50%; background: rgba(30, 30, 46, .55); color: #cdd6f4; opacity: .45; cursor: pointer;
+    transition: opacity .15s; }
+  #ha-addon-settings:hover, #ha-addon-settings:focus-visible { opacity: 1; }
+  #ha-addon-settings svg { display: block; width: 20px; height: 20px; fill: currentColor; }
+</style>
+<button id="ha-addon-settings" type="button" title="Add-on settings" aria-label="Add-on settings" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8zm8.6 4.8 1.9 1.5-1.9 3.3-2.3-.9a7.6 7.6 0 0 1-2 1.2l-.4 2.5H10l-.4-2.5a7.6 7.6 0 0 1-2-1.2l-2.3.9-1.9-3.3 1.9-1.5a7.7 7.7 0 0 1 0-2.4L3.4 9.1l1.9-3.3 2.3.9a7.6 7.6 0 0 1 2-1.2L10 3h3.8l.4 2.5a7.6 7.6 0 0 1 2 1.2l2.3-.9 1.9 3.3-1.9 1.5a7.7 7.7 0 0 1 0 2.4z"/></svg></button>
+<script>
+(function () {
+  var btn = document.getElementById('ha-addon-settings'), ha, slug;
+  try { ha = window.top; slug = ha.location.pathname.split('/')[1] || ''; } catch (e) { return; }   // not the same origin: not inside Home Assistant
+  if (ha === window || !/^[a-z0-9_]+$/.test(slug)) return;
+  var path = '/config/app/' + slug + '/config';
+  btn.hidden = false;
+  btn.addEventListener('click', function () {
+    try {
+      ha.history.pushState(null, '', path);
+      ha.dispatchEvent(new ha.CustomEvent('location-changed', { detail: { replace: false } }));
+    } catch (e) {
+      ha.location.href = path;
+    }
+  });
+})();
+</script>

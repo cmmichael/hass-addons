@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.27] - 2026-10-28
+
+### Added
+- **A settings gear in the web terminal.** A small gear in the terminal's top
+  right corner opens the add-on's Configuration tab in Home Assistant, where
+  options such as `remote_control_server` live. Back returns to the terminal.
+  The add-on's options were otherwise hard to find: the device page under
+  Settings → Devices & services, which "Claude Code" search results lead to,
+  has no options at all. The gear only shows in the sidebar panel; opened on
+  its own in a browser tab, the terminal has no Home Assistant page to steer.
+
 ## [1.2.65-con.26] - 2026-10-28
 
 ### Fixed

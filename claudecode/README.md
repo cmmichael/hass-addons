@@ -96,6 +96,8 @@ claude --continue
 
 ## Configuration Options
 
+Options are on the add-on's **Configuration** tab: **Settings → Apps → Claude Code → Configuration**, or directly at `/config/app/<slug>/config` on your Home Assistant (the slug is the add-on's ID, shown in the address bar of its page). From the web terminal, the gear in the top right corner takes you there. Most options take effect after the add-on restarts.
+
 | Option | Description | Default |
 |--------|-------------|---------|
 | `enable_mcp` | Enable HA integration via hass-mcp | true |

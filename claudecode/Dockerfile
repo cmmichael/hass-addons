@@ -34,6 +34,9 @@ RUN npm install -g corepack@0.35.0 && corepack enable && \
 # touches wasm (only sixel images do, and enableSixel is never set here).
 COPY ttyd-client/ /ttyd-client/
 RUN node /ttyd-client/inject-wasm-shim.js /ttyd/html/dist/inline.html /ttyd-client/wasm-shim.html
+# A gear in the terminal's top right corner opens the add-on's Configuration
+# tab in Home Assistant (/config/app/<slug>/config); see settings-button.html.
+RUN node /ttyd-client/inject-snippet.js /ttyd/html/dist/inline.html /ttyd-client/settings-button.html
 
 FROM ${BUILD_FROM}
 
