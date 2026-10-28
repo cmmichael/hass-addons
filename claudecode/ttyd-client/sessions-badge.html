@@ -1,0 +1,104 @@
+<!-- Remote Control sessions badge (injected by inject-snippet.js). With
+remote_control_server on, sessions started from claude.ai/code or the Claude
+app run headless beside the terminal session: the terminal cannot show them,
+and they are switched to in the app. This badge, left of the settings gear,
+says they exist: "2 app sessions", with a pulsing dot while one is mid-turn.
+Clicking it lists them, each linking to its page on claude.ai/code. The session the server
+creates at start counts only once someone has used it.
+
+It reads sensor.claude_remote_control_sessions (the generated package's REST
+sensor over the job endpoint's GET /sessions) from the Home Assistant window
+the panel sits in: no request of its own, since ingress reaches only ttyd. It
+stays hidden outside a panel, without the sensor (enable_job_endpoint off or
+the package not included) and while no session runs. -->
+<style>
+  #ha-rc-sessions { position: fixed; top: 6px; right: 56px; z-index: 10; height: 30px; padding: 0 11px 0 9px;
+    display: flex; align-items: center; gap: 7px; border: 0; border-radius: 15px; background: rgba(30, 30, 46, .55);
+    color: #cdd6f4; font: 12px/1 system-ui, sans-serif; opacity: .45; cursor: pointer; transition: opacity .15s; }
+  #ha-rc-sessions[hidden], #ha-rc-list[hidden] { display: none; }
+  #ha-rc-sessions:hover, #ha-rc-sessions:focus-visible, #ha-rc-sessions[aria-expanded="true"] { opacity: 1; }
+  #ha-rc-sessions i { width: 8px; height: 8px; border-radius: 50%; background: #6c7086; }
+  #ha-rc-sessions.busy i { background: #a6e3a1; animation: ha-rc-pulse 1.4s ease-in-out infinite; }
+  @keyframes ha-rc-pulse { 50% { opacity: .3; } }
+  #ha-rc-list { position: fixed; top: 42px; right: 18px; z-index: 11; width: min(330px, calc(100vw - 36px)); box-sizing: border-box;
+    padding: 6px; border-radius: 10px; background: #1e1e2e; color: #cdd6f4; box-shadow: 0 6px 24px rgba(0, 0, 0, .45);
+    font: 13px/1.35 system-ui, sans-serif; }
+  #ha-rc-list p { margin: 4px 8px 6px; color: #a6adc8; font-size: 12px; }
+  #ha-rc-list a { display: flex; justify-content: space-between; gap: 14px; padding: 7px 8px; border-radius: 6px;
+    color: inherit; text-decoration: none; }
+  #ha-rc-list a:hover, #ha-rc-list a:focus-visible { background: #313244; }
+  #ha-rc-list span { color: #a6adc8; white-space: nowrap; }
+  #ha-rc-list .busy span { color: #a6e3a1; }
+</style>
+<button id="ha-rc-sessions" type="button" aria-haspopup="dialog" aria-controls="ha-rc-list" aria-expanded="false" hidden><i></i><b></b></button>
+<div id="ha-rc-list" role="dialog" aria-label="App sessions" aria-describedby="ha-rc-about" hidden></div>
+<script>
+(function () {
+  var badge = document.getElementById('ha-rc-sessions'), list = document.getElementById('ha-rc-list'), ha, slug;
+  try { ha = window.top; slug = ha.location.pathname.split('/')[1] || ''; } catch (e) { return; }   // not the same origin: not inside Home Assistant
+  if (ha === window || !/^[a-z0-9_]+$/.test(slug)) return;
+  var ENTITY = 'sensor.claude_remote_control_sessions', sessions = [];
+
+  function ago(s) {
+    s = Math.max(0, Math.round(s));
+    return s < 90 ? 'just now' : s < 5400 ? Math.round(s / 60) + ' min ago' : s < 129600 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago';
+  }
+  function read() {
+    try {
+      var st = ha.document.querySelector('home-assistant').hass.states[ENTITY];
+      var a = st && st.attributes;
+      return a && a.server === 'running' && Array.isArray(a.sessions) ? a.sessions : [];
+    } catch (e) { return []; }
+  }
+  function render() {
+    var now = Date.now() / 1000;
+    list.textContent = '';
+    var p = document.createElement('p');
+    p.id = 'ha-rc-about';
+    p.textContent = 'Started from claude.ai/code or the Claude app. They run here without a terminal: open one in the app.';
+    list.appendChild(p);
+    sessions.forEach(function (s, i) {
+      var a = document.createElement('a'), name = document.createElement('b'), state = document.createElement('span');
+      var id = /^cse_[A-Za-z0-9]+$/.test(s.id || '') ? s.id : null;
+      a.href = id ? 'https://claude.ai/code/session_' + id.slice(4) : 'https://claude.ai/code';
+      a.target = '_blank'; a.rel = 'noopener';
+      a.className = s.state === 'busy' ? 'busy' : '';
+      name.textContent = 'Session ' + (i + 1);
+      name.title = id || 'pid ' + s.pid;
+      var last = Math.max(s.last_stop || 0, s.last_prompt || 0, s.started || 0);
+      state.textContent = s.state === 'busy' ? 'working' : last ? 'idle, last active ' + ago(now - last) : 'idle';
+      a.appendChild(name); a.appendChild(state); list.appendChild(a);
+    });
+  }
+  function update() {
+    sessions = read();
+    var n = sessions.length, busy = sessions.some(function (s) { return s.state === 'busy'; });
+    badge.hidden = n === 0;
+    badge.classList.toggle('busy', busy);
+    badge.lastChild.textContent = n + (n === 1 ? ' app session' : ' app sessions');
+    badge.title = busy ? 'A session started from the app is working' : 'Sessions started from claude.ai/code or the Claude app';
+    if (n === 0) close();
+    else if (!list.hidden) render();
+  }
+  function close(refocus) {
+    if (list.hidden) return;
+    list.hidden = true;
+    badge.setAttribute('aria-expanded', 'false');
+    if (refocus) { var t = document.querySelector('.xterm-helper-textarea'); if (t) t.focus(); }
+  }
+  badge.addEventListener('click', function (e) {
+    e.stopPropagation();
+    if (!list.hidden) return close(true);
+    render();
+    list.hidden = false;
+    badge.setAttribute('aria-expanded', 'true');
+  });
+  document.addEventListener('click', function (e) { if (!list.contains(e.target)) close(false); });
+  // Esc closes the list and stops there: it must not reach the terminal (Claude reads Esc as "interrupt").
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !list.hidden) { e.stopPropagation(); e.preventDefault(); close(true); }
+  }, true);
+  update();
+  setInterval(update, 5000);   // reads the Home Assistant window's state: no network request
+})();
+</script>

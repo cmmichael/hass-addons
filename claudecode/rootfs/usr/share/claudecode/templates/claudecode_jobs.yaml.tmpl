@@ -14,6 +14,8 @@
 #   rest:      sensor.claude_jobs_attention      → the alarm anchor (polls GET /jobs; unavailable = endpoint down)
 #   rest:      sensor.claude_usage_* / binary_sensor.claude_usage_stale → Claude subscription usage (polls GET /usage;
 #              whole-account Max/Pro plan limits; omitted when the add-on option enable_usage_sensors is off)
+#   rest:      sensor.claude_remote_control_sessions → sessions the Remote Control server runs for claude.ai/code and
+#              the Claude app (polls GET /sessions; 0 and server "off" when remote_control_server is off)
 #   template:  sensor.claude_jobs_monthly_cost   → statistics-grade monthly spend
 #   template:  sensor.claude_usage_weekly_<surface> → each surface's share of this week's usage, as plain % sensors
 #   automation: republish on HA start · attention alarm · alarm clear
@@ -196,6 +198,28 @@ rest:
         availability: "{{ value_json is defined and value_json is mapping and value_json.extra_usage is mapping and value_json.extra_usage.used_credits is number }}"
         value_template: "{{ value_json.extra_usage.used_credits }}"
   # __USAGE_END__
+
+  # The Remote Control server's sessions (remote_control_server): started from claude.ai/code or the Claude app, run
+  # headless in the add-on, so the web terminal cannot show them; its badge reads this sensor. Attributes change only
+  # when a session starts, ends or takes a turn.
+  - resource: "http://__CLAUDECODE_HOST__:__CLAUDECODE_PORT__/sessions"
+    method: GET
+    scan_interval: 30
+    timeout: 10
+    headers:
+      Authorization: "Bearer __CLAUDECODE_TOKEN__"
+      Accept: "application/json"
+    sensor:
+      - name: "Claude Remote Control Sessions"    # → sensor.claude_remote_control_sessions; how many sessions are running;
+        unique_id: "claudecode_rc_sessions"       #   attributes: server (off|running|stopped), busy (how many are mid-turn),
+        icon: "mdi:cellphone-link"                #   sessions [{pid, id, state busy|idle, started, last_prompt, last_stop}]
+        state_class: measurement
+        availability: "{{ value_json is defined and value_json is mapping and value_json.count is number }}"
+        value_template: "{{ value_json.count }}"
+        json_attributes:
+          - server
+          - busy
+          - sessions
 
 template:
   - sensor:

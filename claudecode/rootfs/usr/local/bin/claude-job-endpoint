@@ -15,6 +15,9 @@ Routes (JSON `application/json; charset=utf-8` unless noted; all but /health nee
   GET  /jobs/<tok>/detail    200 text/markdown = last result's `detail`; 204 if none
   GET  /usage                200 the Claude subscription usage snapshot (usage.py) for the package's
                              usage sensors; 404 {error: usage_disabled} when enable_usage_sensors is off
+  GET  /sessions             200 the Remote Control server's sessions (rc_sessions.py) for
+                             sensor.claude_remote_control_sessions: {server off|running|stopped,
+                             server_pid, count, busy, sessions: [{pid, id, state busy|idle, ...}]}
   POST /jobs/<tok>/run       202 {accepted, job, run_id}; benign declines are 200
                              {accepted:false, reason: disabled|rate_limited}; 401/404/413/411/400/408/
                              503 stopping/503 cli_preflight_failed/422 not_triggerable|invalid_input
@@ -60,7 +63,7 @@ are never touched on shutdown.
 import os, sys, pathlib  # noqa: E401 -- shared bootstrap (breakdown §0)
 _LIB = os.environ.get("CLAUDE_JOB_LIB_DIR") or str(pathlib.Path(__file__).resolve().parent.parent / "lib" / "claude-job")
 sys.path.insert(0, _LIB)
-import jobcommon as jc, jobdef, usage  # noqa: E401,E402
+import jobcommon as jc, jobdef, rc_sessions, usage  # noqa: E401,E402
 
 import argparse  # noqa: E402
 import hmac  # noqa: E402
@@ -541,6 +544,7 @@ ROUTES = (
     ("GET", re.compile(r"^/jobs$"), "jobs_summary", True),
     ("GET", re.compile(r"^/jobs/([^/]+)/detail$"), "job_detail", True),
     ("GET", re.compile(r"^/usage$"), "usage_snapshot", True),
+    ("GET", re.compile(r"^/sessions$"), "rc_sessions", True),
     ("POST", re.compile(r"^/jobs/([^/]+)/run$"), "job_run", True),
     ("POST", re.compile(r"^/jobs/([^/]+)/enable$"), "job_enable", True),
     ("POST", re.compile(r"^/jobs/([^/]+)/disable$"), "job_disable", True),
@@ -735,6 +739,10 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             log(f"usage poll could not start: {exc!r}")
         self.send_json(200, ep.usage.snapshot())
+
+    def rc_sessions(self):
+        enabled = jc.addon_option("remote_control_server", False) is True
+        self.send_json(200, rc_sessions.snapshot(jc.RUN_DIR, enabled))
 
     def job_run(self, tok):
         """2k order: (401 done) -> 404 -> 413/400 -> stopping -> disabled -> preflight ->

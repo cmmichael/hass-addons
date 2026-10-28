@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.29] - 2026-10-28
+
+### Added
+- **Remote Control sessions are visible from Home Assistant.** Sessions started
+  from claude.ai/code or the Claude app (`remote_control_server`) run without a
+  terminal, so the web terminal never showed them and nothing said they existed.
+  - `sensor.claude_remote_control_sessions` (generated package, polled every
+    30 s from the job endpoint's new `GET /sessions`): how many are running,
+    with the server state, how many are mid-turn and the list as attributes.
+    The attributes change only when a session starts, ends or takes a turn.
+  - A badge left of the terminal's settings gear: "2 app sessions", with a
+    pulsing dot while one is working, hidden while there are none. Clicking it
+    lists them, each linking to its page on claude.ai/code. Esc closes the list
+    without reaching Claude.
+  The session the server creates at start counts only once it has been used.
+  The list needs `apply_claude_updates` on (its session hooks find them).
+
 ## [1.2.65-con.28] - 2026-10-28
 
 ### Fixed

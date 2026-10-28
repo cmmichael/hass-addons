@@ -113,8 +113,8 @@ class RenderPackageTest(unittest.TestCase):
 
         # token: exactly the 3 rest_command headers + 2 rest headers (jobs + usage), nowhere else
         token_lines = [l for l in text.splitlines() if TOKEN in l]
-        self.assertEqual(text.count(TOKEN), 5)
-        self.assertEqual(len(token_lines), 5)
+        self.assertEqual(text.count(TOKEN), 6)
+        self.assertEqual(len(token_lines), 6)
         self.assertNotIn("__USAGE_", text)                          # region markers never reach the file
         for line in token_lines:
             self.assertEqual(line.strip(), f'Authorization: "Bearer {TOKEN}"')
@@ -237,14 +237,14 @@ class RenderPackageTest(unittest.TestCase):
         # by flag ...
         self.render("--no-usage")
         text = self.pkg.read_text()
-        self.assertEqual(text.count(TOKEN), 4)
+        self.assertEqual(text.count(TOKEN), 5)
         code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
         self.assertNotIn("/usage", code)
         self.assertNotIn("claude_usage", code)
         self.assertNotIn("__USAGE_", text)
         doc = ha_yaml_load(text)
         self.assertEqual(sorted(doc), ["automation", "rest", "rest_command", "template"])
-        self.assertEqual(len(doc["rest"]), 1)
+        self.assertEqual(len(doc["rest"]), 2)   # /jobs and /sessions
         self.assertEqual(len(doc["template"]), 1)
         self.assertEqual(doc["template"][0]["sensor"][0]["name"], "Claude Jobs Monthly Cost")
         self.assertIn("usage sensors off", "\n".join(self.render("--no-usage")[0].splitlines()))
@@ -252,7 +252,7 @@ class RenderPackageTest(unittest.TestCase):
         self.s.options_file.write_text('{"job_default_model": "opus", "enable_job_endpoint": true, '
                                        '"enable_usage_sensors": false, "usage_poll_interval": 600}')
         self.render()
-        self.assertEqual(self.pkg.read_text().count(TOKEN), 4)
+        self.assertEqual(self.pkg.read_text().count(TOKEN), 5)
         self.render("--usage")
         doc = ha_yaml_load(self.pkg.read_text())
         self.assertEqual(doc["rest"][1]["scan_interval"], 600, "option usage_poll_interval drives the HA poll cadence")
@@ -313,7 +313,7 @@ class RenderPackageTest(unittest.TestCase):
         alt = self.s.root / "alt-token"
         alt.write_text(TOKEN2 + "\n")
         self.render("--token-file", str(alt), token=None)
-        self.assertEqual(self.pkg.read_text().count(TOKEN2), 5)
+        self.assertEqual(self.pkg.read_text().count(TOKEN2), 6)
 
     def test_invalid_hostname_exits_2_and_writes_nothing(self):
         for bad in ("Bad_Host", "-leading-dash", "dots.not.allowed", "UPPER", "a" * 64, "spa ce"):
@@ -347,7 +347,7 @@ class RenderPackageTest(unittest.TestCase):
         # token rotation is a material change -> reload again
         self.render(token=TOKEN2)
         third = self.pkg.read_text()
-        self.assertEqual(third.count(TOKEN2), 5)
+        self.assertEqual(third.count(TOKEN2), 6)
         self.assertNotIn(TOKEN, third)
         self.assertEqual(self.reload_posts(), ["/core/api/services/rest_command/reload",
                                                "/core/api/services/rest/reload"])
@@ -422,7 +422,7 @@ class RenderPackageTest(unittest.TestCase):
                          sorted(["__ADDON_VERSION__", "__CLAUDECODE_HOST__", "__CLAUDECODE_PORT__",
                                  "__CLAUDECODE_TOKEN__", "__GENERATED_AT__", "__SCAN_INTERVAL__",
                                  "__USAGE_SCAN_INTERVAL__", "__USAGE_BEGIN__", "__USAGE_END__"]))
-        self.assertEqual(text.count("__CLAUDECODE_TOKEN__"), 5)
+        self.assertEqual(text.count("__CLAUDECODE_TOKEN__"), 6)   # rest_command x3, rest /jobs, /usage, /sessions
         # region markers: balanced, on comment lines only, and the two regions hold the usage block
         marks = [l.strip() for l in text.splitlines() if "__USAGE_BEGIN__" in l or "__USAGE_END__" in l]
         self.assertEqual(len(marks), 4)
@@ -437,7 +437,7 @@ class RenderPackageTest(unittest.TestCase):
             self.assertIsNone(PLACEHOLDER_RE.search(rendered), on)
             doc = ha_yaml_load(rendered)
             self.assertEqual(doc["rest"][0]["sensor"][0]["json_attributes"], ANCHOR_ATTRIBUTES)
-            self.assertEqual(len(doc["rest"]), 2 if on else 1)
+            self.assertEqual(len(doc["rest"]), 3 if on else 2)   # /jobs, /usage (when on), /sessions
         with self.assertRaises(ValueError):
             rp.select_regions("# __USAGE_BEGIN__\nx\n", usage_enabled=True)
         with self.assertRaises(ValueError):
