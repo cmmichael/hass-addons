@@ -84,6 +84,8 @@ CLI_STATE_DIR=/data/claudecode
 CLI_VERSION_FILE=$CLI_STATE_DIR/cli-version  # the release to bring back (also written by claude-update-watcher)
 CLI_BAD_FILE=$CLI_STATE_DIR/cli-bad          # releases that were restored but did not run here
 CLI_CHANNEL_FILE=$CLI_STATE_DIR/cli-channel  # claude_update_channel at the last boot
+CLI_VERIFIED_FILE=$RUN_DIR/cli-verified      # the release that answered --version in this container (boot probe, watcher)
+NPM_CACHE_DIR=/data/npm-cache
 CLAUDE_PKG_JSON=/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json
 RESTORED_VERSION=""
 
@@ -412,7 +414,10 @@ check_avx() {
 claude_responds() {
   CLAUDE_PROBE_OUT=$(timeout 30 claude --version < /dev/null 2>&1)
   CLAUDE_PROBE_RC=$?
-  [ "$CLAUDE_PROBE_RC" -eq 0 ]
+  [ "$CLAUDE_PROBE_RC" -eq 0 ] || return 1
+  local v=${CLAUDE_PROBE_OUT%% *}
+  is_release "$v" && mkdir -p "$RUN_DIR" 2>/dev/null && printf '%s\n' "$v" > "$CLI_VERIFIED_FILE" 2>/dev/null
+  return 0
 }
 
 installed_claude_version() { jq -r '.version // empty' "$CLAUDE_PKG_JSON" 2>/dev/null; }
@@ -421,17 +426,42 @@ version_gt() {  # $1 > $2
   [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
 }
 
-# Record the installed release so the next boot can bring it back. Reads
-# package.json and never runs claude, so it is safe inside on_stop's budget.
+# Record the installed release so the next boot can bring it back - only if
+# it is the one that answered --version in this container (the boot probe or
+# the update watcher wrote CLI_VERIFIED_FILE), so a release that never ran
+# here is never remembered, and only if it is newer than the record, so a
+# remembered release that was not restored this boot (a cache miss, a timed
+# out probe) is not forgotten in favour of the older one running now. Reads
+# two files and never runs claude, so it is safe inside on_stop's budget.
 remember_claude_release() {
-  local v
+  local v have
   v=$(installed_claude_version)
   is_release "$v" || return 0
-  [ "$(cat "$CLI_VERSION_FILE" 2>/dev/null)" = "$v" ] && return 0
+  [ "$(cat "$CLI_VERIFIED_FILE" 2>/dev/null)" = "$v" ] || return 0
+  have=$(cat "$CLI_VERSION_FILE" 2>/dev/null)
+  if is_release "$have" && ! grep -qxF "$have" "$CLI_BAD_FILE" 2>/dev/null; then
+    version_gt "$v" "$have" || return 0
+  fi
   mkdir -p "$CLI_STATE_DIR" 2>/dev/null \
     && printf '%s\n' "$v" > "$CLI_VERSION_FILE.tmp" 2>/dev/null \
     && mv -f "$CLI_VERSION_FILE.tmp" "$CLI_VERSION_FILE" 2>/dev/null
   return 0
+}
+
+# npm retires the package dir to a `.claude-code-<hash>` sibling while it
+# installs a new one and removes it at the end; an install killed in between
+# (the timeout, a stop during boot) leaves the shadow and no runnable claude.
+# Put the shadow back, so the image's release is there without the network.
+recover_claude_shadow() {
+  local dir shadow
+  dir=$(dirname "$CLAUDE_PKG_JSON")
+  for shadow in "$(dirname "$dir")"/.claude-code-*; do
+    [ -d "$shadow" ] || return 1
+    rm -rf "$dir" && mv "$shadow" "$dir" || return 1
+    warn "Put back the Claude Code install that npm had set aside ($(installed_claude_version))"
+    return 0
+  done
+  return 1
 }
 
 # Bring back the release this add-on had updated to before the restart, from
@@ -469,9 +499,15 @@ restore_claude_release() {
   if [ "$rc" -ne 0 ]; then
     if grep -q ENOTCACHED "$log"; then
       warn "Claude Code $want is no longer in the cache; using the image's $built. Claude Code downloads its update again in the background"
-    else
-      warn "Reinstalling Claude Code $want failed (npm exit $rc: $(tail -n 1 "$log")); using the image's $built"
+      return 0
     fi
+    warn "Reinstalling Claude Code $want failed (npm exit $rc: $(tail -n 1 "$log")); using the image's $built"
+    # A failed npm may have left no runnable claude: the shadow first, then
+    # the registry. check_claude probes (and says why) if neither works.
+    [ -e "$CLAUDE_PKG_JSON" ] && claude_responds && return 0
+    recover_claude_shadow && claude_responds && return 0
+    timeout 300 npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@$built" > "$log" 2>&1 \
+      || err "Reinstalling the image's $built failed too (npm: $(tail -n 1 "$log"))"
     return 0
   fi
   if claude_responds; then
@@ -480,10 +516,16 @@ restore_claude_release() {
     info "Claude Code $want is back"
     return 0
   fi
-  err "Claude Code $want was reinstalled but does not run here (exit $CLAUDE_PROBE_RC); going back to the image's $built and not trying $want again"
-  mkdir -p "$CLI_STATE_DIR" 2>/dev/null && printf '%s\n' "$want" >> "$CLI_BAD_FILE"
+  if [ "$CLAUDE_PROBE_RC" -eq 124 ]; then
+    # A hang can be load at boot rather than the release (the update watcher
+    # retries this case too), so it is not held against the release.
+    err "Claude Code $want was reinstalled but did not answer within 30s; going back to the image's $built for this boot"
+  else
+    err "Claude Code $want was reinstalled but does not run here (exit $CLAUDE_PROBE_RC); going back to the image's $built and not trying $want again"
+    mkdir -p "$CLI_STATE_DIR" 2>/dev/null && printf '%s\n' "$want" >> "$CLI_BAD_FILE"
+  fi
   timeout 300 npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@$built" > "$log" 2>&1 \
-    || err "Going back to $built failed (npm: $(tail -n 1 "$log"))"
+    || err "Going back to $built failed (npm: $(tail -n 1 "$log")); the registry is needed for that"
 }
 
 # Keep npm's cache to the installed and the remembered release (the latter in
@@ -493,7 +535,10 @@ restore_claude_release() {
 # every update. Runs before any Claude starts, so no update is writing to the
 # cache meanwhile (npm cache verify collects content nothing points at).
 prune_claude_cache() {
-  local keep remembered key v n=0
+  local keep remembered key v drop="" n
+  # npx keeps the packages it runs under the cache; on /data they would
+  # outlive the container. Start each boot without them, as before.
+  rm -rf "$NPM_CACHE_DIR/_npx"
   keep=$(installed_claude_version)
   is_release "$keep" || return 0
   remembered=$(cat "$CLI_VERSION_FILE" 2>/dev/null)
@@ -501,11 +546,25 @@ prune_claude_cache() {
   while read -r key; do
     v=$(printf '%s' "$key" | sed -nE 's#.*/-/claude-code(-[a-z0-9]+)*-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz$#\2#p')
     [ -n "$v" ] && [ "$v" != "$keep" ] && [ "$v" != "$remembered" ] || continue
-    timeout 30 npm cache clean "$key" > /dev/null 2>&1 && n=$((n + 1))
+    drop="$drop $key"
   done < <(timeout 60 npm cache ls 2>/dev/null | grep -E '/@anthropic-ai/claude-code[a-z0-9-]*/-/.*\.tgz$')
-  [ "$n" -gt 0 ] || return 0
-  timeout 120 npm cache verify > /dev/null 2>&1
-  info "Dropped $n old Claude Code package(s) from /data/npm-cache"
+  [ -n "$drop" ] || return 0
+  # Not `npm cache clean <key>`: that reads the whole tarball (240 MB) into
+  # memory first. npm's cache library drops an entry from the index alone.
+  # shellcheck disable=SC2086  # $drop is a list of keys without spaces
+  n=$(timeout -k 5 120 node -e '
+    const cacache = require(process.argv[1]); const cache = process.argv[2]; let n = 0;
+    (async () => {
+      for (const key of process.argv.slice(3)) {
+        const info = await cacache.get.info(cache, key); if (!info) continue;
+        await cacache.rm.entry(cache, key); await cacache.rm.content(cache, info.integrity); n++;
+      }
+      console.log(n);
+    })().catch(e => { console.error(e.message); console.log(n); process.exit(1); });
+  ' "$(dirname "$(dirname "$(readlink -f "$(command -v npm)")")")/node_modules/cacache" "$NPM_CACHE_DIR/_cacache" $drop 2>/dev/null | tail -n 1)
+  # Always: content an interrupted removal left behind is collected here.
+  timeout -k 5 300 npm cache verify > /dev/null 2>&1
+  info "Dropped ${n:-0} old Claude Code package(s) from $NPM_CACHE_DIR"
 }
 
 maybe_update_claude() {

@@ -214,23 +214,26 @@ ENV PATH="/root/.local/bin:/homeassistant/.claudecode/npm-global/bin:${PATH}"
 
 # npm's cache on /data, so the Claude Code release the add-on updated itself
 # to survives a restart (every restart recreates the container): at boot,
-# claudecode-start reinstalls it from this cache, offline. The cache only holds
-# downloaded packages and is never executed; the CLI still runs from
-# /usr/local. Set after every build-time npm step, which must not write there.
+# claudecode-start reinstalls it from this cache, offline. The cache holds
+# downloaded packages; the CLI still runs from /usr/local, and npx's scratch
+# area in the cache is cleared at every start. Set after every build-time
+# npm step, which must not write there.
 ENV npm_config_cache=/data/npm-cache
 
 # Set working directory
 WORKDIR /homeassistant
 
 # Health check. ttyd binds 7681 only at the END of startup, and a legitimate
-# boot can spend many minutes before that (auto_update_claude npm update:
-# 300s timeout, plus a 300s rollback if the update cannot run, plus probes
-# and MCP setup - and every restart recreates the container, redoing all of
-# it). start-period must cover that worst case: failures during it don't
+# boot can spend many minutes before that (bringing back the last Claude Code
+# update: up to 180s offline install, a 30s probe and a 300s rollback; then
+# auto_update_claude: 300s npm install, plus a 300s rollback if the update
+# cannot run; plus probes and MCP setup - and every restart recreates the
+# container, redoing all of it). start-period must cover that worst case
+# (about 1200s with everything failing): failures during it don't
 # count, one success marks healthy immediately, so a fast boot loses nothing.
 # With a short start-period the Supervisor Watchdog kills a slow boot at
 # ~2min and loops forever, npm never finishing before the restart.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=900s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=1500s --retries=3 \
     CMD curl -sf http://localhost:7681/ || exit 1
 
 # Startup logic lives in rootfs/usr/local/bin/claudecode-start: it reads the

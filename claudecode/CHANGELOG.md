@@ -11,11 +11,14 @@ All notable changes to this project will be documented in this file.
   add-on now remembers the release in use (at stop, and whenever the update
   watcher has checked a new one) and reinstalls it at the next start from
   npm's cache, which now lives in `/data/npm-cache`. The reinstall needs no
-  network and takes a few seconds. A release that does not run is rolled back
-  to the image's release and never tried again. Nothing on `/data` is
-  executed: the cache holds downloaded packages only, so the AppArmor profile
-  is unchanged. The cache keeps only the release in use and is excluded from
-  backups.
+  network and takes a few seconds. Only a release that has answered
+  `--version` here is remembered. One that crashes after the restart is
+  rolled back to the image's release and never tried again; one that times
+  out is rolled back for that boot only. Claude Code still runs from the
+  container, not from `/data`, and the AppArmor profile is unchanged. The
+  cache keeps only the release in use, is excluded from backups, and npx's
+  scratch area in it is cleared at every start. The health check's start
+  period grows to 25 minutes to cover the slowest boot.
 - **`claude_update_channel`** (`stable`, default, or `latest`): one option for
   Claude Code's background updates (written to `autoUpdatesChannel` in
   settings.json at every start), the `auto_update_claude` startup update and

@@ -315,7 +315,7 @@ When `session_persistence` is enabled, the add-on uses tmux to maintain your ter
 - **While running.** Claude Code updates itself in the background on the chosen channel.
 - **Across restarts.** Every restart recreates the container, which used to throw that update away. Now the add-on remembers the release in use and reinstalls it at the next start from npm's cache in `/data/npm-cache`, without the network. That takes a few seconds. A release that does not run after the restart is rolled back to the image's release and not tried again. The add-on log shows each step.
 - **Changing the channel.** The next start drops the remembered release and starts from the image's release; Claude Code then follows the new channel.
-- **The cache.** It keeps only the packages of the release in use (about 130 MB) and is left out of Home Assistant backups. Only downloaded packages are kept on `/data`; Claude Code still runs from the container, so nothing on persistent storage is ever executed.
+- **The cache.** It keeps only the packages of the release in use (about 130 MB) and is left out of Home Assistant backups. Claude Code itself still runs from the container, not from `/data`, and the AppArmor profile is unchanged. `npx` keeps the packages it runs in the same cache; the add-on clears that area at every start, so as before nothing `npx` fetched outlives a restart.
 
 ### Updates to running sessions
 
@@ -437,7 +437,8 @@ With `remote_control_server` on, the add-on also runs `claude remote-control` be
 Claude Code 2.1.113+ ships as a Bun-compiled native binary whose JavaScript engine requires the AVX CPU instruction set. On hosts without it — typically VMs exposing the generic `kvm64` CPU model (Proxmox default) — every `claude` invocation hangs or dies, including `claude --version`.
 
 Mitigations already built in:
-- The image build smoke-tests the Claude Code release it installs, and a release brought back after a restart is checked the same way. If that release cannot run on the build host, it falls back to the newest earlier release that does, so a rebuild on an AVX-less host still produces a working add-on.
+- The image build smoke-tests the Claude Code release it installs. If that release cannot run on the build host, it falls back to the newest earlier release that does, so a rebuild on an AVX-less host still produces a working add-on.
+- A release brought back after a restart is probed too. One that crashes is rolled back to the image's release and not tried again; one that merely times out is rolled back for that boot only.
 - At startup, all `claude` calls are wrapped in timeouts, so a broken binary can't block the terminal from starting; a `[WARN]` in the log tells you AVX is missing.
 
 The real fix is at the hypervisor: on Proxmox set the VM CPU type to `host` (or `x86-64-v3`), then fully stop and start the VM. Verify inside the add-on with `grep -o -m1 avx2 /proc/cpuinfo`.
