@@ -1,6 +1,6 @@
 # Keeping Claude Code updates across add-on restarts
 
-> A proposal for the add-on to stop losing the Claude Code release it has already updated to every time it restarts. Nothing is built yet. The decision it asks for is whether to keep the update as a **cached package that is reinstalled at boot** (recommended, no AppArmor change) or as an **executable copy on `/data`** (simpler, but a security-profile change).
+> A proposal for the add-on to stop losing the Claude Code release it has already updated to every time it restarts. Nothing is built yet. The decision it asks for is whether to keep the update as a **cached package that is reinstalled at boot** (recommended, no AppArmor change) or as an **executable copy on `/data`** (simpler, but a security-profile change). It also explains why rebuilding the image more often is not the answer, and reports that add-on releases today do not refresh Claude Code at all, because of Docker's build cache.
 
 _status: proposal, for the maintainer's decision · 2026-10-28 · follows #45 (apply_claude_updates) and #46_
 
@@ -62,6 +62,34 @@ Keep execution where it is, in the container layer under `/usr/local`. Persist o
 
 Rely on add-on releases to raise the build's release, since each build installs the newest working release. That works only as often as the add-on is released and updated: today that is con.20 against 34 Claude Code releases. #45 already limits the damage to "an old release until the session is idle". This is a reasonable choice if the boot step in B is not wanted.
 
+## Option D: rebuild the image more often ("just take latest at build")
+
+`install-claude.sh` already installs the newest release that runs. There is no pin. So it is tempting to refresh the image instead: rebuild nightly, or on a schedule, and let each build take the newest release. Two facts argue against it.
+
+**1. A rebuild does not reliably take the newest release.** Supervisor 2026.10.4 builds add-ons with `docker buildx build . --tag … --pull --build-arg BUILD_VERSION=… …` (`supervisor/apps/build.py`, `get_docker_args`). `--pull` refreshes the base image, and there is no `--no-cache`. `Rebuild` removes the image, but BuildKit's build cache is separate and survives that. In this Dockerfile, `RUN install-claude.sh` (line 109) comes before `ARG BUILD_VERSION` (line 196). Its cache key is therefore its parent layers plus the command text. Neither changes with an add-on release, nor with time. Unless the base image's digest has moved, the step comes back from cache, holding whatever Claude Code release the first build found.
+
+The reference install shows it happening:
+
+| File in the running con.20 image | Written |
+| --- | --- |
+| `/etc/claudecode-addon-version` (`1.2.65-con.20`, written by a `RUN` after `ARG BUILD_VERSION`) | 2026-10-18 03:30 |
+| `/etc/claude-code-version` (`2.1.276`, written by `install-claude.sh`) | **2026-09-18** 03:31 |
+| `/usr/share/ttyd/index.html` (the ttyd-client stage) | 2026-09-18 03:31 |
+
+The con.20 image was built on 18 October. Its Claude Code layer is the one from the build a month earlier, so the add-on update installed 2.1.276. The newest release on 18 October was 2.1.302.
+
+**Separate fix, whichever option is chosen.** Declare `ARG BUILD_VERSION` before `RUN install-claude.sh`; the later `RUN echo … > /etc/claudecode-addon-version` can keep using it. Every add-on release then re-resolves the newest working release at build time, as `install-claude.sh` intends. It costs one install per add-on release and changes nothing else. I can send it as its own small PR.
+
+**2. A rebuild is a restart, and a heavy one.** Even with the cache fixed, refreshing by rebuild means stopping the add-on, so a live session or Remote Control connection is cut. It also rebuilds the whole image, the ttyd web client stage and the package installs included, to change one package. Option B gets the same result in about 7 s of boot time, with no extra restart and no network.
+
+### A note on "stable"
+
+npm carries three dist-tags for Claude Code, read 2026-10-28: `latest` 2.1.312, `next` 2.1.312, and `stable` 2.1.308. `stable` trails `latest` by a few releases. The build takes the newest version in the list, which is effectively `latest`, and Claude's background updater follows `latest` unless it is told otherwise. If the aim is fewer brand-new releases that turn out broken, the lever is the update channel:
+- `install-claude.sh` could resolve the `stable` dist-tag first, still falling back to the newest working release;
+- Claude Code's own `autoUpdatesChannel` setting could be set to `"stable"`.
+
+That choice is independent of A, B, C or D, and works with any of them.
+
 ## Recommendation
 
 Option B. It closes the gap without the one change, executable persistent storage, that this add-on's profile was written to prevent. It reuses the smoke test and rollback that already exist, and the release it reinstalls has already been checked by the watcher from #45.
@@ -76,6 +104,9 @@ It would be verified the way #45 and #46 were. That means the harness, with a st
 
 ## Open questions for the maintainer
 
-1. **A or B,** or C for now?
+0. **The `ARG BUILD_VERSION` fix** from Option D. It looks like a plain bug, since add-on releases do not refresh Claude Code today. May I send it separately?
+
+1. **A, B, C or D?** (D is the rebuild option; I recommend B.)
 2. **`auto_update_claude`.** Keep it with its present meaning, keep it as "also go to latest at boot", or deprecate it in favour of B?
 3. **The cache.** Is `backup_exclude` for `/data/npm-cache` acceptable? Or should the cache live on `/data` only for the CLI, via a dedicated cache directory used only by the boot step and the updater's environment?
+4. **Update channel.** Should the build and the background updater follow `stable` rather than `latest`? See the note under Option D.
