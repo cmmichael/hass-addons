@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.30] - 2026-10-28
+
+### Changed
+- **The Remote Control server's session is named after the prefix.** The
+  session `claude remote-control` pre-creates at start now carries
+  `remote_control_session_prefix` as its title (`HomeAssistant` by default),
+  so it is easy to pick out in the session list at claude.ai/code and in the
+  Claude app, and it keeps that title instead of being retitled from the
+  first prompt. Sessions started on demand from the app are still named
+  `<prefix>-adjective-noun`.
+
 ## [1.2.65-con.29] - 2026-10-28
 
 ### Added
