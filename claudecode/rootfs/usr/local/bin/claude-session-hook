@@ -60,10 +60,11 @@ done
 [ "${pid:-0}" -gt 1 ] || exit 0
 
 if [ -n "$TMUX_PANE" ]; then
-  case $(tr '\0' ' ' < "/proc/$(ppid_of "$pid")/cmdline" 2>/dev/null) in
-    *claude-auto-launch*) ;;
-    *) exit 0 ;;
-  esac
+  # Exactly `<interpreter> /usr/local/bin/claude-auto-launch`, as tmux or ttyd
+  # start it: a tool shell whose command merely mentions the launcher does not
+  # count.
+  mapfile -d '' -t argv < "/proc/$(ppid_of "$pid")/cmdline" 2>/dev/null
+  [ "${#argv[@]}" -eq 2 ] && [ "${argv[1]}" = /usr/local/bin/claude-auto-launch ] || exit 0
   dir=/run/claudecode/panes/${TMUX_PANE#%}
   stamp "$dir"
   if [ -n "$sid" ]; then
