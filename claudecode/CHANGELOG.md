@@ -4,16 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [1.2.65-con.24] - 2026-10-28
 
+### Added
+- **Claude Code updates survive restarts.** Every restart recreates the
+  container, so the release Claude Code had updated itself to was lost, and the
+  add-on came back on the image's release and downloaded the update again. The
+  add-on now remembers the release in use (at stop, and whenever the update
+  watcher has checked a new one) and reinstalls it at the next start from
+  npm's cache, which now lives in `/data/npm-cache`. The reinstall needs no
+  network and takes a few seconds. A release that does not run is rolled back
+  to the image's release and never tried again. Nothing on `/data` is
+  executed: the cache holds downloaded packages only, so the AppArmor profile
+  is unchanged. The cache keeps only the release in use and is excluded from
+  backups.
+- **`claude_update_channel`** (`stable`, default, or `latest`): one option for
+  Claude Code's background updates (written to `autoUpdatesChannel` in
+  settings.json at every start), the `auto_update_claude` startup update and
+  the release brought back after a restart. Changing it drops the remembered
+  release once, so the switch takes effect at the next start.
+
 ### Changed
 - The image now installs the current release of Claude Code's stable channel
   at every build. Before, the install step was cached by Docker: once built,
   every rebuild and add-on update reused the Claude Code from the first build,
   however old. The build now checks the channel each time and reinstalls only
-  when it has moved. The stable channel is typically about a week behind the
-  newest release and skips releases with major regressions.
-- A new `CLAUDE_CODE_VERSION` build argument picks the channel or version:
-  `stable` (default), `latest`, or an exact version such as `2.1.308`. Set it
-  under `args:` in `build.yaml`.
+  when it has moved. A new `CLAUDE_CODE_VERSION` build argument picks the
+  channel or version: `stable` (default), `latest`, or an exact version such
+  as `2.1.308`. Set it under `args:` in `build.yaml`.
+- `auto_update_claude` installs the newest release of `claude_update_channel`
+  (`npm install @…@<channel>`) instead of running `npm update`, which can stop
+  short of the newest release.
 - On a host the channel's release cannot run on (no AVX), the build now falls
   back only to earlier releases, never to a newer one than the channel serves.
 

@@ -74,6 +74,19 @@ JOB_ENDPOINT_PORT=7682
 JOB_ENDPOINT_BIN=${JOB_ENDPOINT_BIN:-/usr/local/bin/claude-job-endpoint}
 JOB_LIB=/usr/local/lib/claude-job
 
+# Claude Code updates across restarts. Every restart recreates the container,
+# which throws away the release Claude Code updated itself to under
+# /usr/local. npm's cache lives on /data instead (npm_config_cache, set in the
+# Dockerfile), and the installed release is remembered there; at boot that
+# release is reinstalled from the cache, offline. /data stays non-executable:
+# only the downloaded packages persist, never a runnable copy.
+CLI_STATE_DIR=/data/claudecode
+CLI_VERSION_FILE=$CLI_STATE_DIR/cli-version  # the release to bring back (also written by claude-update-watcher)
+CLI_BAD_FILE=$CLI_STATE_DIR/cli-bad          # releases that were restored but did not run here
+CLI_CHANNEL_FILE=$CLI_STATE_DIR/cli-channel  # claude_update_channel at the last boot
+CLAUDE_PKG_JSON=/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json
+RESTORED_VERSION=""
+
 # Per-pane session state from claude-session-hook (apply_claude_updates).
 PANE_STATE_DIR=$RUN_DIR/panes
 SESSION_HOOK=/usr/local/bin/claude-session-hook
@@ -237,6 +250,7 @@ reap_job_runs() {  # <= JOB_STOP_GRACE_SECS, then KILL whatever is left
 shutdown_jobs() { stop_job_spawners; signal_job_runs; reap_job_runs; }
 on_stop() {
   trap - EXIT TERM INT HUP
+  remember_claude_release  # one jq read: the release to reinstall at the next boot
   stop_update_watcher # no update restart may start while we stop
   stop_job_spawners   # nothing new can spawn
   signal_job_runs     # TERM lands early ...
@@ -348,6 +362,8 @@ read_options() {
   ENABLE_PLAYWRIGHT=$(opt '.enable_playwright_mcp // false')
   PLAYWRIGHT_HOST=$(opt '.playwright_cdp_host // ""')
   AUTO_UPDATE=$(opt '.auto_update_claude // false')
+  UPDATE_CHANNEL=$(opt '.claude_update_channel // "stable"')
+  case $UPDATE_CHANNEL in stable|latest) ;; *) UPDATE_CHANNEL=stable ;; esac
   APPLY_UPDATES=$(opt 'if .apply_claude_updates == null then true else .apply_claude_updates end')
   DEFAULT_MODE=$(opt '.default_permission_mode // "auto"')
   ENABLE_RC=$(opt '.enable_remote_control // false')
@@ -399,20 +415,114 @@ claude_responds() {
   [ "$CLAUDE_PROBE_RC" -eq 0 ]
 }
 
+installed_claude_version() { jq -r '.version // empty' "$CLAUDE_PKG_JSON" 2>/dev/null; }
+is_release() { [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+version_gt() {  # $1 > $2
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
+}
+
+# Record the installed release so the next boot can bring it back. Reads
+# package.json and never runs claude, so it is safe inside on_stop's budget.
+remember_claude_release() {
+  local v
+  v=$(installed_claude_version)
+  is_release "$v" || return 0
+  [ "$(cat "$CLI_VERSION_FILE" 2>/dev/null)" = "$v" ] && return 0
+  mkdir -p "$CLI_STATE_DIR" 2>/dev/null \
+    && printf '%s\n' "$v" > "$CLI_VERSION_FILE.tmp" 2>/dev/null \
+    && mv -f "$CLI_VERSION_FILE.tmp" "$CLI_VERSION_FILE" 2>/dev/null
+  return 0
+}
+
+# Bring back the release this add-on had updated to before the restart, from
+# npm's cache on /data and without the network. It is probed before anything
+# uses it. One that does not run here is rolled back to the image's release
+# and never tried again.
+restore_claude_release() {
+  local built want last_channel log=/tmp/claude-restore.log rc
+  built=$(cat /etc/claude-code-version 2>/dev/null || echo unknown)
+  want=$(cat "$CLI_VERSION_FILE" 2>/dev/null)
+  last_channel=$(cat "$CLI_CHANNEL_FILE" 2>/dev/null)
+  mkdir -p "$CLI_STATE_DIR" 2>/dev/null && printf '%s\n' "$UPDATE_CHANNEL" > "$CLI_CHANNEL_FILE" 2>/dev/null
+  if [ -n "$last_channel" ] && [ "$last_channel" != "$UPDATE_CHANNEL" ] && is_release "$want"; then
+    # The remembered release came from the other channel: drop it, so the
+    # switch takes effect now instead of from the channel's next release.
+    info "claude_update_channel changed from $last_channel to $UPDATE_CHANNEL; not bringing back $want. Using the image's $built, and Claude Code follows $UPDATE_CHANNEL from here"
+    rm -f "$CLI_VERSION_FILE"
+    return 0
+  fi
+  if ! is_release "$want"; then
+    info "No Claude Code update to bring back; using the image's $built"
+    return 0
+  fi
+  if ! version_gt "$want" "$built"; then
+    info "The image's Claude Code $built is not older than the last one used ($want); using it"
+    return 0
+  fi
+  if grep -qxF "$want" "$CLI_BAD_FILE" 2>/dev/null; then
+    info "Not bringing back Claude Code $want: it did not run here at an earlier boot. Using the image's $built"
+    return 0
+  fi
+  info "Reinstalling Claude Code $want, the release in use before the restart, from the cache on /data (offline)"
+  timeout -k 10 180 npm install -g --offline --no-fund --no-audit "@anthropic-ai/claude-code@$want" > "$log" 2>&1
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if grep -q ENOTCACHED "$log"; then
+      warn "Claude Code $want is no longer in the cache; using the image's $built. Claude Code downloads its update again in the background"
+    else
+      warn "Reinstalling Claude Code $want failed (npm exit $rc: $(tail -n 1 "$log")); using the image's $built"
+    fi
+    return 0
+  fi
+  if claude_responds; then
+    CLAUDE_OK=true  # check_claude will not probe again
+    RESTORED_VERSION=$want
+    info "Claude Code $want is back"
+    return 0
+  fi
+  err "Claude Code $want was reinstalled but does not run here (exit $CLAUDE_PROBE_RC); going back to the image's $built and not trying $want again"
+  mkdir -p "$CLI_STATE_DIR" 2>/dev/null && printf '%s\n' "$want" >> "$CLI_BAD_FILE"
+  timeout 300 npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@$built" > "$log" 2>&1 \
+    || err "Going back to $built failed (npm: $(tail -n 1 "$log"))"
+}
+
+# Keep npm's cache to the installed and the remembered release (the latter in
+# case bringing it back failed this time for a passing reason, like a timeout
+# on slow storage). Claude Code downloads about
+# 130 MB per release, so without this the cache on /data would grow with
+# every update. Runs before any Claude starts, so no update is writing to the
+# cache meanwhile (npm cache verify collects content nothing points at).
+prune_claude_cache() {
+  local keep remembered key v n=0
+  keep=$(installed_claude_version)
+  is_release "$keep" || return 0
+  remembered=$(cat "$CLI_VERSION_FILE" 2>/dev/null)
+  grep -qxF "$remembered" "$CLI_BAD_FILE" 2>/dev/null && remembered=""
+  while read -r key; do
+    v=$(printf '%s' "$key" | sed -nE 's#.*/-/claude-code(-[a-z0-9]+)*-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz$#\2#p')
+    [ -n "$v" ] && [ "$v" != "$keep" ] && [ "$v" != "$remembered" ] || continue
+    timeout 30 npm cache clean "$key" > /dev/null 2>&1 && n=$((n + 1))
+  done < <(timeout 60 npm cache ls 2>/dev/null | grep -E '/@anthropic-ai/claude-code[a-z0-9-]*/-/.*\.tgz$')
+  [ "$n" -gt 0 ] || return 0
+  timeout 120 npm cache verify > /dev/null 2>&1
+  info "Dropped $n old Claude Code package(s) from /data/npm-cache"
+}
+
 maybe_update_claude() {
   BUILT_VERSION=$(cat /etc/claude-code-version 2>/dev/null || echo unknown)
+  local base=${RESTORED_VERSION:-$BUILT_VERSION}  # the release known to run here
   if [ "$AUTO_UPDATE" != "true" ]; then
-    info "Claude Code $BUILT_VERSION (verified at build time)"
+    [ -n "$RESTORED_VERSION" ] || info "Claude Code $BUILT_VERSION (verified at build time)"
     return 0
   fi
   warn "auto_update_claude=true; the build verified $BUILT_VERSION, an update may install a release that cannot run (and writes to the container layer)"
-  info "Running npm update (npm prints nothing while it works - on slow hardware this silence can last several minutes; set auto_update_claude: false for faster boots)"
-  timeout 300 npm update -g @anthropic-ai/claude-code || warn "Update failed; keeping the installed version"
+  info "Installing Claude Code from the $UPDATE_CHANNEL channel (npm prints nothing while it works - on slow hardware this silence can last several minutes; set auto_update_claude: false for faster boots)"
+  timeout 300 npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@$UPDATE_CHANNEL" || warn "Update failed; keeping the installed version"
   if claude_responds; then
     CLAUDE_OK=true  # check_claude will not probe again
   else
-    err "The updated Claude Code does not run here; rolling back to $BUILT_VERSION"
-    timeout 300 npm install -g "@anthropic-ai/claude-code@$BUILT_VERSION" || err "Rollback failed"
+    err "The updated Claude Code does not run here; rolling back to $base"
+    timeout 300 npm install -g "@anthropic-ai/claude-code@$base" || err "Rollback failed"
   fi
 }
 
@@ -510,6 +620,11 @@ apply_settings() {
     info "Default permission mode: $DEFAULT_MODE"
   else
     warn "Could not set permissions.defaultMode=$DEFAULT_MODE in settings.json"
+  fi
+  if settings_set --arg ch "$UPDATE_CHANNEL" '.autoUpdatesChannel = $ch'; then
+    info "Claude Code update channel: $UPDATE_CHANNEL"
+  else
+    warn "Could not set autoUpdatesChannel=$UPDATE_CHANNEL in settings.json"
   fi
   if [ "$ENABLE_RC" = "true" ]; then
     settings_set '.remoteControlAtStartup = true' || warn "Could not enable remoteControlAtStartup in settings.json"
@@ -775,7 +890,9 @@ run_step "read add-on options" read_options
 run_step "init settings.json" settings_init
 run_step "scrub legacy token" scrub_legacy_token
 run_step "CPU feature check" check_avx
+run_step "bring back Claude Code update" restore_claude_release
 run_step "Claude Code update check" maybe_update_claude
+run_step "prune Claude Code cache" prune_claude_cache
 run_step "install extra npm packages" install_extra_npm_packages
 run_step "probe claude CLI" check_claude
 run_step "job CLI preflight" cli_preflight_log

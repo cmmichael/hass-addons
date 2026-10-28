@@ -33,6 +33,9 @@ STALE_TURN_SECS=${CLAUDE_UPDATE_STALE_TURN_SECS:-3600}
 PANES=${CLAUDE_PANE_STATE_DIR:-/run/claudecode/panes}
 PROCS=${CLAUDE_PROC_STATE_DIR:-/run/claudecode/procs}
 RC_PIDFILE=${CLAUDE_RC_SERVER_PIDFILE:-/run/claudecode/rc-server.pid}
+# The release claudecode-start reinstalls at boot; recorded here as soon as a
+# release has answered --version, so a crash or power cut (no on_stop) keeps it.
+CLI_VERSION_FILE=${CLAUDE_CLI_VERSION_FILE:-/data/claudecode/cli-version}
 BOOT=$(awk '/^btime/ {print $2}' /proc/stat)
 HZ=$(getconf CLK_TCK 2>/dev/null || echo 100)
 
@@ -43,6 +46,15 @@ BAD_RETRY_SECS=${CLAUDE_UPDATE_BAD_RETRY_SECS:-600}
 verified=""   # "<key>:ok" or "<key>:bad:<epoch>" for the installed binary last checked
 warned=""     # the key a "does not run here" warning was last logged for
 signaled=" "  # pids already sent SIGTERM: a Claude winding down is not signalled again
+
+remember_release() {  # $1 = version that answered --version
+  [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+  [ "$(cat "$CLI_VERSION_FILE" 2>/dev/null)" = "$1" ] && return 0
+  mkdir -p "${CLI_VERSION_FILE%/*}" 2>/dev/null \
+    && printf '%s\n' "$1" > "$CLI_VERSION_FILE.tmp" 2>/dev/null \
+    && mv -f "$CLI_VERSION_FILE.tmp" "$CLI_VERSION_FILE" 2>/dev/null
+  return 0
+}
 
 # Sets BIN to the installed binary once it is known to run. Fails while an
 # update is mid-install or when the new release does not run here. Not called
@@ -67,6 +79,7 @@ installed_ok() {
     verified="$key:ok"
     INSTALLED_VERSION=${out%% *}
     BIN=$bin
+    remember_release "$INSTALLED_VERSION"
     info "Claude Code $INSTALLED_VERSION is installed; idle sessions on an older release will be restarted onto it"
   else
     verified="$key:bad:$now"

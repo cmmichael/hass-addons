@@ -212,6 +212,13 @@ RUN echo 'source ~/.bashrc' > /root/.profile
 # volume so user-installed MCP servers survive add-on rebuilds.
 ENV PATH="/root/.local/bin:/homeassistant/.claudecode/npm-global/bin:${PATH}"
 
+# npm's cache on /data, so the Claude Code release the add-on updated itself
+# to survives a restart (every restart recreates the container): at boot,
+# claudecode-start reinstalls it from this cache, offline. The cache only holds
+# downloaded packages and is never executed; the CLI still runs from
+# /usr/local. Set after every build-time npm step, which must not write there.
+ENV npm_config_cache=/data/npm-cache
+
 # Set working directory
 WORKDIR /homeassistant
 

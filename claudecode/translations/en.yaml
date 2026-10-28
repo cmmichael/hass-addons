@@ -50,6 +50,14 @@ configuration:
       session (no turn running, nothing printed or typed for 15 minutes) is
       restarted onto the installed update and resumes the same conversation.
       Needs session persistence and auto-launch.
+  claude_update_channel:
+    name: Claude Code update channel
+    description: >-
+      Which Claude Code releases this add-on follows. stable is typically about
+      a week behind the newest release and skips releases with major
+      regressions; latest gets every release as it ships. Applies to Claude
+      Code's background updates, the startup update (auto_update_claude) and
+      the release brought back after a restart.
   enable_remote_control:
     name: Enable Remote Control
     description: >-

@@ -33,6 +33,10 @@ map:
   - media:rw
   - addon_config:rw
   - backup:ro
+# npm's download cache (npm_config_cache in the Dockerfile): losing it costs one re-download.
+backup_exclude:
+  - "npm-cache"
+  - "npm-cache/*"
 options:
   enable_mcp: true
   enable_playwright_mcp: false
@@ -43,6 +47,7 @@ options:
   session_persistence: true
   auto_update_claude: false
   apply_claude_updates: true
+  claude_update_channel: stable
   default_permission_mode: auto
   auto_launch_claude: continue
   enable_remote_control: false
@@ -65,6 +70,7 @@ schema:
   session_persistence: bool
   auto_update_claude: bool
   apply_claude_updates: bool
+  claude_update_channel: list(stable|latest)
   default_permission_mode: list(default|auto|acceptEdits|plan|bypassPermissions)
   auto_launch_claude: list(off|new|continue)
   enable_remote_control: bool
