@@ -52,6 +52,15 @@ configuration:
       opção, uma sessão ociosa (sem turno em andamento e sem atividade por 15
       minutos) é reiniciada na atualização instalada e retoma a mesma conversa.
       Requer persistência de sessão e inicialização automática.
+  claude_update_channel:
+    name: Canal de atualização do Claude Code
+    description: >-
+      Quais versões do Claude Code este add-on segue. stable costuma ficar
+      cerca de uma semana atrás da versão mais recente e pula versões com
+      regressões graves; latest recebe cada versão assim que é publicada.
+      Vale para as atualizações em segundo plano do Claude Code, para a
+      atualização na inicialização (auto_update_claude) e para a versão
+      recuperada após uma reinicialização.
   enable_remote_control:
     name: Habilitar Controle Remoto
     description: >-

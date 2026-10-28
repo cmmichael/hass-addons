@@ -105,7 +105,8 @@ claude --continue
 | `terminal_theme` | dark or light | dark |
 | `working_directory` | Start directory | /homeassistant |
 | `session_persistence` | Use tmux for persistent sessions | true |
-| `auto_update_claude` | Auto-update Claude Code on startup (rolls back automatically if the new release cannot run on this host). Writes to the container layer — see changelog 1.2.63-con.10 | false |
+| `auto_update_claude` | Install the newest release of `claude_update_channel` on startup (rolls back automatically if the new release cannot run on this host). Rarely needed: Claude Code updates itself in the background, and updates survive restarts. Writes to the container layer — see changelog 1.2.63-con.10 | false |
+| `claude_update_channel` | Which Claude Code releases to follow: `stable` (typically about a week behind, skipping releases with major regressions) or `latest` (every release as it ships). Applies to background updates, `auto_update_claude` and the release brought back after a restart. See [Claude Code releases and updates](#claude-code-releases-and-updates) | stable |
 | `apply_claude_updates` | Claude Code installs its own updates in the background, but a running session keeps the old release until it restarts. With this on, an idle session moves onto the installed update by itself and resumes the same conversation. See [Updates to running sessions](#updates-to-running-sessions) | true |
 | `default_permission_mode` | Default Claude Code permission mode: `default`, `auto`, `acceptEdits`, `plan`, or `bypassPermissions`. `auto` uses a classifier to approve/deny prompts (Claude Code v2.1.83+, Max/Team/Enterprise/API plan, Sonnet 4.6+/Opus 4.6+); falls back silently to `default` if requirements aren't met | auto |
 | `auto_launch_claude` | Auto-run Claude when the terminal opens: `off` (bash prompt), `new` (`claude`), or `continue` (`claude --continue`). Drops to a login shell when Claude exits. With `enable_remote_control` on, the session is started at container boot instead (see Remote Control below) | continue |
@@ -306,6 +307,16 @@ When `session_persistence` is enabled, the add-on uses tmux to maintain your ter
 - Claude Code conversations are preserved
 - With `enable_remote_control` on, the session is created at boot so Remote Control works without a browser
 
+### Claude Code releases and updates
+
+`claude_update_channel` picks which releases Claude Code follows: `stable`, the default, or `latest`. The add-on writes it to `autoUpdatesChannel` in settings.json at every start, so change it in the add-on options, not in settings.json.
+
+- **The image.** Each build installs the current stable release. Nothing is pinned: a rebuild or add-on update picks up whatever the channel serves then, and reuses the cached install when the channel has not moved. The build cannot read add-on options; to build from another channel or hold back a version, set the `CLAUDE_CODE_VERSION` build argument in `build.yaml` under `args:` (`stable`, `latest`, or an exact version such as `2.1.308`).
+- **While running.** Claude Code updates itself in the background on the chosen channel.
+- **Across restarts.** Every restart recreates the container, which used to throw that update away. Now the add-on remembers the release in use and reinstalls it at the next start from npm's cache in `/data/npm-cache`, without the network. That takes a few seconds. A release that does not run after the restart is rolled back to the image's release and not tried again. The add-on log shows each step.
+- **Changing the channel.** The next start drops the remembered release and starts from the image's release; Claude Code then follows the new channel.
+- **The cache.** It keeps only the packages of the release in use (about 130 MB) and is left out of Home Assistant backups. Claude Code itself still runs from the container, not from `/data`, and the AppArmor profile is unchanged. `npx` keeps the packages it runs in the same cache; the add-on clears that area at every start, so as before nothing `npx` fetched outlives a restart.
+
 ### Updates to running sessions
 
 Claude Code updates itself in the background, but each running session keeps executing the release it started with. On an unattended box nobody restarts it, so the session falls behind indefinitely. With `apply_claude_updates` on, the default, the add-on moves an idle session onto the installed release:
@@ -426,7 +437,8 @@ With `remote_control_server` on, the add-on also runs `claude remote-control` be
 Claude Code 2.1.113+ ships as a Bun-compiled native binary whose JavaScript engine requires the AVX CPU instruction set. On hosts without it — typically VMs exposing the generic `kvm64` CPU model (Proxmox default) — every `claude` invocation hangs or dies, including `claude --version`.
 
 Mitigations already built in:
-- The image build installs the newest Claude Code release that actually runs on the build host (`install-claude.sh` smoke-tests candidates), so a rebuild on an AVX-less host still produces a working add-on.
+- The image build smoke-tests the Claude Code release it installs. If that release cannot run on the build host, it falls back to the newest earlier release that does, so a rebuild on an AVX-less host still produces a working add-on.
+- A release brought back after a restart is probed too. One that crashes is rolled back to the image's release and not tried again; one that merely times out is rolled back for that boot only.
 - At startup, all `claude` calls are wrapped in timeouts, so a broken binary can't block the terminal from starting; a `[WARN]` in the log tells you AVX is missing.
 
 The real fix is at the hypervisor: on Proxmox set the VM CPU type to `host` (or `x86-64-v3`), then fully stop and start the VM. Verify inside the add-on with `grep -o -m1 avx2 /proc/cpuinfo`.

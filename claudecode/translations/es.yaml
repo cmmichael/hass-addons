@@ -52,6 +52,15 @@ configuration:
       esta opción, una sesión inactiva (sin turno en curso y sin actividad
       durante 15 minutos) se reinicia con la actualización instalada y retoma la
       misma conversación. Requiere persistencia de sesión e inicio automático.
+  claude_update_channel:
+    name: Canal de actualización de Claude Code
+    description: >-
+      Qué versiones de Claude Code sigue este complemento. stable suele ir
+      una semana por detrás de la versión más reciente y omite las versiones
+      con regresiones graves; latest recibe cada versión en cuanto se publica.
+      Se aplica a las actualizaciones en segundo plano de Claude Code, a la
+      actualización al arrancar (auto_update_claude) y a la versión que se
+      recupera tras un reinicio.
   enable_remote_control:
     name: Habilitar Control Remoto
     description: >-

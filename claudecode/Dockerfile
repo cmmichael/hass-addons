@@ -94,22 +94,6 @@ RUN case "${BUILD_ARCH}" in \
     chmod +x /usr/bin/ttyd
 COPY --from=ttyd-client /ttyd/html/dist/inline.html /usr/share/ttyd/index.html
 
-# Install Claude Code.
-# 2.1.113 replaced the JS entrypoint with a Bun-compiled native binary, whose
-# JavaScriptCore requires AVX. Hosts that lack it - notably VMs exposing the
-# generic kvm64 CPU model - cannot run 2.1.113+ (it deadlocks or dies with
-# SIGILL). Fix that at the hypervisor (Proxmox CPU type "host"), not here.
-# No version is hardcoded: take latest when it runs, otherwise the newest
-# release that passes a smoke test, so the add-on still builds on such hosts.
-# The package pulls a ~240MB platform-native binary via optional deps, so clean
-# the npm cache and temp dirs in the SAME layer - otherwise ~100MB+ of cache
-# gets baked into the image.
-COPY install-claude.sh /usr/local/bin/install-claude.sh
-RUN chmod +x /usr/local/bin/install-claude.sh \
-    && /usr/local/bin/install-claude.sh \
-    && npm cache clean --force \
-    && rm -rf /root/.npm /tmp/*
-
 # Install hass-mcp for Home Assistant integration and pymodbus for Modbus operations.
 # hass-mcp is pinned: the job broker (docs/DESIGN-claude-jobs.md §4.5) allow-lists
 # hass-mcp's one fixed /api/template query by importing it, and the design's
@@ -166,6 +150,31 @@ RUN case "${BUILD_ARCH}" in \
             echo "[WARN] Home Assistant CLI is not published for ${BUILD_ARCH}; the 'ha' command will be unavailable" ;; \
     esac
 
+# Install Claude Code.
+# CLAUDE_CODE_VERSION is an npm dist-tag or an exact version. The default
+# follows the stable channel (typically about a week behind latest, skipping
+# releases with major regressions); `latest` follows every release as it
+# ships; `2.1.308` forces that one. Override it per build with
+# `args:` in build.yaml or `docker build --build-arg`.
+# The ADD fetches the registry manifest for that tag on every build, so this
+# layer re-runs when the channel moves and stays cached otherwise. Without it
+# the layer would be reused forever and every rebuild would keep the Claude
+# Code of the first build: Supervisor builds with the layer cache (--pull, no
+# --no-cache). install-claude.sh installs the version the manifest names, so
+# the install matches the cache key; it also handles hosts the release cannot
+# run on (AVX, see the script). This step sits after the other installs so a
+# new Claude Code release only rebuilds this layer and the ones below it.
+# The package pulls a ~240MB platform-native binary via optional deps, so clean
+# the npm cache and temp dirs in the SAME layer - otherwise ~100MB+ of cache
+# gets baked into the image.
+ARG CLAUDE_CODE_VERSION=stable
+ADD https://registry.npmjs.org/@anthropic-ai/claude-code/${CLAUDE_CODE_VERSION} /tmp/claude-code-manifest.json
+COPY install-claude.sh /usr/local/bin/install-claude.sh
+RUN chmod +x /usr/local/bin/install-claude.sh \
+    && CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION}" /usr/local/bin/install-claude.sh \
+    && npm cache clean --force \
+    && rm -rf /root/.npm /tmp/*
+
 # Create necessary directories (NOT /root/.claude - will be symlinked at runtime)
 RUN mkdir -p \
     /homeassistant \
@@ -203,18 +212,28 @@ RUN echo 'source ~/.bashrc' > /root/.profile
 # volume so user-installed MCP servers survive add-on rebuilds.
 ENV PATH="/root/.local/bin:/homeassistant/.claudecode/npm-global/bin:${PATH}"
 
+# npm's cache on /data, so the Claude Code release the add-on updated itself
+# to survives a restart (every restart recreates the container): at boot,
+# claudecode-start reinstalls it from this cache, offline. The cache holds
+# downloaded packages; the CLI still runs from /usr/local, and npx's scratch
+# area in the cache is cleared at every start. Set after every build-time
+# npm step, which must not write there.
+ENV npm_config_cache=/data/npm-cache
+
 # Set working directory
 WORKDIR /homeassistant
 
 # Health check. ttyd binds 7681 only at the END of startup, and a legitimate
-# boot can spend many minutes before that (auto_update_claude npm update:
-# 300s timeout, plus a 300s rollback if the update cannot run, plus probes
-# and MCP setup - and every restart recreates the container, redoing all of
-# it). start-period must cover that worst case: failures during it don't
+# boot can spend many minutes before that (bringing back the last Claude Code
+# update: up to 180s offline install, a 30s probe and a 300s rollback; then
+# auto_update_claude: 300s npm install, plus a 300s rollback if the update
+# cannot run; plus probes and MCP setup - and every restart recreates the
+# container, redoing all of it). start-period must cover that worst case
+# (about 1200s with everything failing): failures during it don't
 # count, one success marks healthy immediately, so a fast boot loses nothing.
 # With a short start-period the Supervisor Watchdog kills a slow boot at
 # ~2min and loops forever, npm never finishing before the restart.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=900s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=1500s --retries=3 \
     CMD curl -sf http://localhost:7681/ || exit 1
 
 # Startup logic lives in rootfs/usr/local/bin/claudecode-start: it reads the
