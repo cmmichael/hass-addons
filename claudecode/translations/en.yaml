@@ -58,6 +58,25 @@ configuration:
       regressions; latest gets every release as it ships. Applies to Claude
       Code's background updates, the startup update (auto_update_claude) and
       the release brought back after a restart.
+  default_permission_mode:
+    name: Default permission mode
+    description: >-
+      What Claude Code may do without asking. auto lets a classifier approve or
+      deny each request (needs a Max, Team, Enterprise or API plan; otherwise it
+      falls back to default). default asks every time, acceptEdits approves file
+      edits, plan only plans, and bypassPermissions approves everything.
+  auto_launch_claude:
+    name: Start Claude automatically
+    description: >-
+      What the web terminal runs. continue resumes the last conversation, new
+      starts a fresh one, off gives a shell prompt. With Remote Control on, the
+      session is started when the add-on boots, without waiting for a browser.
+  extra_npm_packages:
+    name: Extra npm packages
+    description: >-
+      npm packages, such as MCP servers, installed at every start into a
+      persistent folder on the Home Assistant volume, so they survive add-on
+      updates. Their commands are on the PATH.
   enable_remote_control:
     name: Enable Remote Control
     description: >-
