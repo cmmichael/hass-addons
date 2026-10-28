@@ -1021,11 +1021,10 @@ start_update_watcher() {
 # the log, while a session that detaches and comes back, or an error that
 # recurs, is logged again. (Dropping only consecutive repeats would not help:
 # the repaint is a block of lines, so no line ever follows itself.)
-# --name gives the session the server pre-creates at start the configured
-# prefix as its title, so it is recognisable in the session list and keeps
-# that title (an unnamed session is retitled from its first prompt). The
-# subcommand has no positional name; the prefix flag still names the sessions
-# started on demand (prefix-adjective-noun).
+# --no-create-session-in-dir: by default the server pre-creates one session in
+# the working directory at start, which nobody may ever open; without it the
+# session list at claude.ai/code only holds sessions someone started. The
+# prefix flag names those on-demand sessions (prefix-adjective-noun).
 start_rc_server() {
   [ "$RC_SERVER" = "true" ] || return 0
   if [ "$CLAUDE_OK" != "true" ]; then
@@ -1037,7 +1036,7 @@ start_rc_server() {
     trap - INT QUIT
     rm -f "$RUN_DIR/rc-restart"   # left by a watcher that was stopped mid-restart
     while [ ! -e "$RUN_DIR/stopping" ]; do
-      claude remote-control --permission-mode "$DEFAULT_MODE" --name "$RC_PREFIX" \
+      claude remote-control --permission-mode "$DEFAULT_MODE" --no-create-session-in-dir \
           --remote-control-session-name-prefix "$RC_PREFIX" < /dev/null \
           > >(sed -u 's/\x1b\]8;;\([^\x1b\x07]*\)\(\x1b\\\|\x07\)/\1 /g; s/\x1b\[[0-9;?]*[A-Za-z]//g' \
                | awk 'NF { t = systime(); if (!($0 in seen) || t - seen[$0] > 30) { print "[rc-server] " $0; fflush() }; seen[$0] = t }') 2>&1 &
