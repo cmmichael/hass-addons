@@ -561,8 +561,10 @@ Set **`enable_job_endpoint: true`** and restart the add-on. At start it then:
   if it dies. The port is not published to the host: it is reachable only on Home
   Assistant's internal add-on network — from HA Core, from other add-ons, and from inside
   this container — as `http://<add-on hostname>:7682`. The hostname is derived from the
-  repository URL, `d7e97e69-claudecode` for this repository; confirm yours by running
-  `hostname` in the add-on terminal. Every route except `/health` requires
+  repository URL, `d7e97e69-claudecode` for this repository; confirm yours with
+  `curl -s -H "Authorization: Bearer $SUPERVISOR_TOKEN" http://supervisor/addons/self/info | jq -r .data.hostname`
+  in the add-on terminal (`hostname` prints the Home Assistant host's name, not this
+  one: the container shares the host's UTS namespace). Every route except `/health` requires
   `Authorization: Bearer <token>`.
 
 With the option off, `claude-job` in the terminal keeps working; only the endpoint, the

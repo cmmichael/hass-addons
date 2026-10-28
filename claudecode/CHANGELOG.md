@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.31] - 2026-10-28
+
+### Changed
+- **The container reports the Home Assistant host's hostname.** `host_uts: true`
+  shares the host's UTS namespace, so `hostname` inside the add-on (and the
+  machine name Claude Code reports to claude.ai for Remote Control) is the HA
+  host's name, e.g. `homeassistant`, instead of the add-on slug
+  `d7e97e69-claudecode`. Nothing the add-on runs depends on the container
+  hostname: the generated job package takes the add-on's resolvable name from
+  the Supervisor (`d7e97e69-claudecode` is still what HA Core reaches the job
+  endpoint at), and the Playwright MCP derives its target from the add-on
+  slug. The one fallback that did read the container hostname (rendering the
+  job package while the Supervisor API is unreachable) would now pick the host
+  name, which HA Core cannot use to reach this add-on; the package is
+  re-rendered on every boot, so a later start with the Supervisor up heals it.
+  The profile grants no `sys_admin`, so the host's name cannot be changed from
+  inside the container.
+- **The Remote Control server no longer pre-creates a session.** `claude
+  remote-control` runs with `--no-create-session-in-dir`, so the session list
+  at claude.ai/code only shows sessions someone started from the app, and the
+  sessions sensor and badge no longer have an idle one to filter out. The
+  `--name` that con.30 added titled that pre-created session and goes with it;
+  on-demand sessions are still named `<prefix>-adjective-noun`.
+
 ## [1.2.65-con.30] - 2026-10-28
 
 ### Changed
