@@ -33,9 +33,9 @@ STALE_TURN_SECS=${CLAUDE_UPDATE_STALE_TURN_SECS:-3600}
 PANES=${CLAUDE_PANE_STATE_DIR:-/run/claudecode/panes}
 PROCS=${CLAUDE_PROC_STATE_DIR:-/run/claudecode/procs}
 RC_PIDFILE=${CLAUDE_RC_SERVER_PIDFILE:-/run/claudecode/rc-server.pid}
-# Touched just before the server is signalled: claudecode-start's loop reads it
-# to tell this restart from a crash, since `claude remote-control` exits 0 (not
-# 143) on SIGTERM.
+# Holds the server's pid, written just before it is signalled: claudecode-start's
+# loop compares it with the pid it waited on to tell this restart from a crash,
+# since `claude remote-control` exits 0 (not 143) on SIGTERM.
 RC_MARK=${CLAUDE_RC_RESTART_MARK:-/run/claudecode/rc-restart}
 # The release claudecode-start reinstalls at boot; recorded here as soon as a
 # release has answered --version, so a crash or power cut (no on_stop) keeps it.
@@ -185,7 +185,8 @@ while sleep "$POLL_SECS"; do
   if [ -n "$rpid" ] && [ -e "/proc/$rpid/exe" ] && ! [ "/proc/$rpid/exe" -ef "$BIN" ] \
      && server_idle "$rpid" && installed_ok && ! [ "/proc/$rpid/exe" -ef "$BIN" ]; then
     info "Restarting the Remote Control server (pid $rpid) onto Claude Code ${INSTALLED_VERSION:-update}; its sessions are idle and reattach"
-    touch "$RC_MARK" 2>/dev/null
+    echo "$rpid" 2>/dev/null > "$RC_MARK" \
+      || warn "Cannot mark the Remote Control server's restart; its loop will take it for a crash and wait 30s"
     if kill -TERM "$rpid" 2>/dev/null; then
       signaled="$signaled$rpid "
     else

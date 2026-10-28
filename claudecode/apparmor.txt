@@ -29,6 +29,9 @@ profile claudecode flags=(attach_disconnected,mediate_deleted) {
   /etc/** r,
   /usr/** r,
   /lib/** r,
+  # /proc itself too: pgrep -P lists it to find a pane's Claude and the Remote
+  # Control server's sessions (claude-update-watcher, stop_sessions).
+  /proc/ r,
   /proc/** r,
   /sys/** r,
 
