@@ -86,6 +86,7 @@ CLI_BAD_FILE=$CLI_STATE_DIR/cli-bad          # releases that were restored but d
 CLI_CHANNEL_FILE=$CLI_STATE_DIR/cli-channel  # claude_update_channel at the last boot
 CLI_VERIFIED_FILE=$RUN_DIR/cli-verified      # the release that answered --version in this container (boot probe, watcher)
 NPM_CACHE_DIR=/data/npm-cache
+NPM_CACHE_MAX_AGE_DAYS=${CLAUDE_NPM_CACHE_MAX_AGE_DAYS:-30}  # anything else npm cached is dropped after this
 CLAUDE_PKG_JSON=/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json
 RESTORED_VERSION=""
 
@@ -530,12 +531,15 @@ restore_claude_release() {
 
 # Keep npm's cache to the installed and the remembered release (the latter in
 # case bringing it back failed this time for a passing reason, like a timeout
-# on slow storage). Claude Code downloads about
-# 130 MB per release, so without this the cache on /data would grow with
-# every update. Runs before any Claude starts, so no update is writing to the
-# cache meanwhile (npm cache verify collects content nothing points at).
+# on slow storage). Claude Code downloads about 130 MB per release, so
+# without this the cache on /data would grow with every update. The cache is
+# image-wide, so everything else npm fetched (extra_npm_packages, npm in the
+# terminal) lands there too: those entries are dropped once they are older
+# than NPM_CACHE_MAX_AGE_DAYS and fetched again when next needed. Runs before
+# any Claude starts, so nothing is writing to the cache meanwhile (npm cache
+# verify collects content nothing points at).
 prune_claude_cache() {
-  local keep remembered key v drop="" n
+  local keep remembered out
   # npx keeps the packages it runs under the cache; on /data they would
   # outlive the container. Start each boot without them, as before.
   rm -rf "$NPM_CACHE_DIR/_npx"
@@ -543,28 +547,31 @@ prune_claude_cache() {
   is_release "$keep" || return 0
   remembered=$(cat "$CLI_VERSION_FILE" 2>/dev/null)
   grep -qxF "$remembered" "$CLI_BAD_FILE" 2>/dev/null && remembered=""
-  while read -r key; do
-    v=$(printf '%s' "$key" | sed -nE 's#.*/-/claude-code(-[a-z0-9]+)*-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz$#\2#p')
-    [ -n "$v" ] && [ "$v" != "$keep" ] && [ "$v" != "$remembered" ] || continue
-    drop="$drop $key"
-  done < <(timeout 60 npm cache ls 2>/dev/null | grep -E '/@anthropic-ai/claude-code[a-z0-9-]*/-/.*\.tgz$')
-  [ -n "$drop" ] || return 0
-  # Not `npm cache clean <key>`: that reads the whole tarball (240 MB) into
-  # memory first. npm's cache library drops an entry from the index alone.
-  # shellcheck disable=SC2086  # $drop is a list of keys without spaces
-  n=$(timeout -k 5 120 node -e '
-    const cacache = require(process.argv[1]); const cache = process.argv[2]; let n = 0;
+  [ -d "$NPM_CACHE_DIR/_cacache" ] || return 0
+  # Through npm's cache library, not `npm cache clean <key>`: that reads the
+  # whole tarball (240 MB) into memory first. This touches the index only.
+  out=$(timeout -k 5 120 node -e '
+    const cacache = require(process.argv[1]); const cache = process.argv[2];
+    const cutoff = Date.now() - Number(process.argv[3]) * 86400000;
+    const keep = new Set(process.argv.slice(4).filter(Boolean));
+    const tarball = /\/@anthropic-ai\/claude-code(?:-[a-z0-9]+)*\/-\/claude-code(?:-[a-z0-9]+)*-([0-9]+\.[0-9]+\.[0-9]+[^/]*)\.tgz$/;
+    const own = /\/@anthropic-ai(?:%2f|\/)claude-code/;  // its package documents: an offline install needs them
+    let releases = 0, old = 0;
     (async () => {
-      for (const key of process.argv.slice(3)) {
-        const info = await cacache.get.info(cache, key); if (!info) continue;
-        await cacache.rm.entry(cache, key); await cacache.rm.content(cache, info.integrity); n++;
+      for (const [key, info] of Object.entries(await cacache.ls(cache))) {
+        const m = key.match(tarball);
+        if (m ? keep.has(m[1]) : own.test(key) || !(info.time < cutoff)) continue;
+        await cacache.rm.entry(cache, key); await cacache.rm.content(cache, info.integrity);
+        if (m) releases++; else old++;
       }
-      console.log(n);
-    })().catch(e => { console.error(e.message); console.log(n); process.exit(1); });
-  ' "$(dirname "$(dirname "$(readlink -f "$(command -v npm)")")")/node_modules/cacache" "$NPM_CACHE_DIR/_cacache" $drop 2>/dev/null | tail -n 1)
-  # Always: content an interrupted removal left behind is collected here.
+      console.log(releases + " " + old);
+    })().catch(e => { console.error(e.message); console.log(releases + " " + old); process.exit(1); });
+  ' "$(dirname "$(dirname "$(readlink -f "$(command -v npm)")")")/node_modules/cacache" \
+      "$NPM_CACHE_DIR/_cacache" "$NPM_CACHE_MAX_AGE_DAYS" "$keep" "$remembered" 2>/dev/null | tail -n 1)
+  [ "${out:-0 0}" != "0 0" ] || return 0
+  # Always after a removal: content an interrupted one left behind is collected here.
   timeout -k 5 300 npm cache verify > /dev/null 2>&1
-  info "Dropped ${n:-0} old Claude Code package(s) from $NPM_CACHE_DIR"
+  info "Dropped ${out% *} old Claude Code package(s) and ${out#* } other cache entries older than $NPM_CACHE_MAX_AGE_DAYS days from $NPM_CACHE_DIR"
 }
 
 maybe_update_claude() {
