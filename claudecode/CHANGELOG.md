@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.65-con.24] - 2026-10-28
+
+### Changed
+- The image now installs the current release of Claude Code's stable channel
+  at every build. Before, the install step was cached by Docker: once built,
+  every rebuild and add-on update reused the Claude Code from the first build,
+  however old. The build now checks the channel each time and reinstalls only
+  when it has moved. The stable channel is typically about a week behind the
+  newest release and skips releases with major regressions.
+- A new `CLAUDE_CODE_VERSION` build argument picks the channel or version:
+  `stable` (default), `latest`, or an exact version such as `2.1.308`. Set it
+  under `args:` in `build.yaml`.
+- On a host the channel's release cannot run on (no AVX), the build now falls
+  back only to earlier releases, never to a newer one than the channel serves.
+
 ## [1.2.65-con.23] - 2026-10-28
 
 ### Fixed

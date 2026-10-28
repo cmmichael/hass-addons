@@ -94,22 +94,6 @@ RUN case "${BUILD_ARCH}" in \
     chmod +x /usr/bin/ttyd
 COPY --from=ttyd-client /ttyd/html/dist/inline.html /usr/share/ttyd/index.html
 
-# Install Claude Code.
-# 2.1.113 replaced the JS entrypoint with a Bun-compiled native binary, whose
-# JavaScriptCore requires AVX. Hosts that lack it - notably VMs exposing the
-# generic kvm64 CPU model - cannot run 2.1.113+ (it deadlocks or dies with
-# SIGILL). Fix that at the hypervisor (Proxmox CPU type "host"), not here.
-# No version is hardcoded: take latest when it runs, otherwise the newest
-# release that passes a smoke test, so the add-on still builds on such hosts.
-# The package pulls a ~240MB platform-native binary via optional deps, so clean
-# the npm cache and temp dirs in the SAME layer - otherwise ~100MB+ of cache
-# gets baked into the image.
-COPY install-claude.sh /usr/local/bin/install-claude.sh
-RUN chmod +x /usr/local/bin/install-claude.sh \
-    && /usr/local/bin/install-claude.sh \
-    && npm cache clean --force \
-    && rm -rf /root/.npm /tmp/*
-
 # Install hass-mcp for Home Assistant integration and pymodbus for Modbus operations.
 # hass-mcp is pinned: the job broker (docs/DESIGN-claude-jobs.md §4.5) allow-lists
 # hass-mcp's one fixed /api/template query by importing it, and the design's
@@ -165,6 +149,31 @@ RUN case "${BUILD_ARCH}" in \
         *) \
             echo "[WARN] Home Assistant CLI is not published for ${BUILD_ARCH}; the 'ha' command will be unavailable" ;; \
     esac
+
+# Install Claude Code.
+# CLAUDE_CODE_VERSION is an npm dist-tag or an exact version. The default
+# follows the stable channel (typically about a week behind latest, skipping
+# releases with major regressions); `latest` follows every release as it
+# ships; `2.1.308` forces that one. Override it per build with
+# `args:` in build.yaml or `docker build --build-arg`.
+# The ADD fetches the registry manifest for that tag on every build, so this
+# layer re-runs when the channel moves and stays cached otherwise. Without it
+# the layer would be reused forever and every rebuild would keep the Claude
+# Code of the first build: Supervisor builds with the layer cache (--pull, no
+# --no-cache). install-claude.sh installs the version the manifest names, so
+# the install matches the cache key; it also handles hosts the release cannot
+# run on (AVX, see the script). This step sits after the other installs so a
+# new Claude Code release only rebuilds this layer and the ones below it.
+# The package pulls a ~240MB platform-native binary via optional deps, so clean
+# the npm cache and temp dirs in the SAME layer - otherwise ~100MB+ of cache
+# gets baked into the image.
+ARG CLAUDE_CODE_VERSION=stable
+ADD https://registry.npmjs.org/@anthropic-ai/claude-code/${CLAUDE_CODE_VERSION} /tmp/claude-code-manifest.json
+COPY install-claude.sh /usr/local/bin/install-claude.sh
+RUN chmod +x /usr/local/bin/install-claude.sh \
+    && CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION}" /usr/local/bin/install-claude.sh \
+    && npm cache clean --force \
+    && rm -rf /root/.npm /tmp/*
 
 # Create necessary directories (NOT /root/.claude - will be symlinked at runtime)
 RUN mkdir -p \
