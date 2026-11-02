@@ -95,6 +95,11 @@ PANE_STATE_DIR=$RUN_DIR/panes
 SESSION_HOOK=/usr/local/bin/claude-session-hook
 UPDATE_WATCHER_PID=""
 RC_SERVER_LOOP_PID=""
+# ttyd parses a -t value as JSON when it can; the theme has to be an object,
+# since the client merges it with Object.assign (a string contributes no keys
+# and the built-in dark theme survives, so `terminal_theme: light` did nothing).
+DARK_THEME='{"background":"#1e1e2e","foreground":"#cdd6f4","cursor":"#f5e0dc"}'
+LIGHT_THEME='{"background":"#eff1f5","foreground":"#4c4f69","cursor":"#dc8a78"}'
 
 cd_work() { cd /homeassistant 2>/dev/null || cd /; }
 
@@ -113,7 +118,7 @@ start_ttyd() {
     -t fontFamily=Monaco,Consolas,monospace \
     -t scrollback=20000 \
     -t macOptionClickForcesSelection=true \
-    -t "theme=${COLORS:-background=#1e1e2e,foreground=#cdd6f4,cursor=#f5e0dc}" \
+    -t "theme=${COLORS:-$DARK_THEME}" \
     ${SHELL_CMD:-bash --login} ) &
   TTYD_PID=$!
   wait "$TTYD_PID"
@@ -914,9 +919,9 @@ start_job_endpoint() {
 
 build_shell_cmd() {
   if [ "$THEME" = "dark" ]; then
-    COLORS='background=#1e1e2e,foreground=#cdd6f4,cursor=#f5e0dc'
+    COLORS=$DARK_THEME
   else
-    COLORS='background=#eff1f5,foreground=#4c4f69,cursor=#dc8a78'
+    COLORS=$LIGHT_THEME
   fi
 
   [ "$CLAUDE_OK" = "true" ] || AUTO_LAUNCH=off

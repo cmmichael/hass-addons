@@ -79,6 +79,7 @@ RUN apk add --no-cache \
     openssl \
     ripgrep \
     p7zip \
+    poppler-utils \
     socat \
     docker-cli \
     && update-ca-certificates

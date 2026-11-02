@@ -2,19 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.2.65-con.33] - 2026-11-01
+
+Takes the two fixes from upstream v1.2.66 that this fork was missing and
+records upstream main through v1.2.76 as merged. Everything else upstream
+merged on 2026-11-01 (PRs #39-#44 from this fork, `claude-login-url`, a
+`remote_control_server` restart loop, headless runs via `addon_stdin`, CI
+workflows, the armv7/armhf/i386 drop, config-key tidying) was either already
+here in adapted form or deliberately not imported: the upstream
+`remote_control_server` is a different, simpler implementation under the same
+option name, and the `addon_stdin` runner overlaps with Claude Jobs.
 
 ### Added
+- `poppler-utils` is installed, so Claude Code's `Read` tool can open PDF
+  files: it renders pages by shelling out to `pdftoppm`, which was missing
+  from the image (upstream v1.2.66; about 20 MiB of image size). It cannot be
+  added at runtime because `apk` cannot exec inside the running add-on.
 - GitHub Actions workflow `.github/workflows/tests.yml`: `make test` on every pull
   request and on `main` (Python 3.13 as in the base image, plus gawk for the
   Remote Control log filter's `systime()`). Read-only permissions. No add-on
   changes, no version bump. Proposed by Constantinos Michael on #58.
 
 ### Fixed
+- **`terminal_theme: light` had no effect.** ttyd cuts a `-t key=value` at
+  the second `=` as well, so `-t "theme=background=#eff1f5,..."` set `theme`
+  to the bare string `background`; the web client merges preferences with
+  `Object.assign({}, defaultDarkTheme, theme)`, a string contributes no keys,
+  and the built-in dark theme survived. `theme` is now passed as a JSON
+  object, which ttyd parses with `json_tokener_parse` (upstream v1.2.66,
+  checked against ttyd 1.7.7's `server.c`).
 - `test_short_body_times_out_with_408_not_500` read the 408 reply with a single
   `recv`, which on the GitHub runner returned the headers without the body (the
   endpoint writes them separately); it now reads until the server closes, as
   `raw_exchange` does. Test only.
+
+### Changed
+- Recorded upstream `robsonfelix/robsonfelix-hass-addons` main through
+  v1.2.76 (`2955cc8`) as merged with an "ours" merge, as 1.2.65-con.2 did
+  for v1.2.65: the fork's tree is unchanged by the merge, GitHub stops
+  reporting main as behind, and future comparisons start from v1.2.76.
 
 ## [1.2.65-con.32] - 2026-10-28
 
