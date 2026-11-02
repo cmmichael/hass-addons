@@ -14,17 +14,20 @@ server pre-creates one session at start, which nobody may ever open, and countin
 sensor read 1 on every box with the server on. Without apply_claude_updates the hooks are not
 installed and the list stays empty while the server itself still reports as running.
 
-Since con.33 the server's own session is known exactly, so the "taken a prompt" rule is only the
+Since con.34 the server's own session is known exactly, so the "taken a prompt" rule is only the
 fallback: the server records it in ~/.claude/projects/<cwd key>/bridge-pointer.json ({"sessionId":
-"session_<ID>", "environmentId": ...}; the key is its working directory with every character outside
-[A-Za-z0-9-] made "-", read from /proc/<server>/cwd), and the session whose cse_<ID> matches is listed
+"session_<ID>" or "cse_<ID>", "environmentId": ..., "pid": ...}; the key is its working directory with
+every character outside [A-Za-z0-9-] made "-", read from /proc/<server>/cwd; a pointer from another pid
+is an earlier run's and is ignored), and the session whose cse_<ID> matches is listed
 with server_session true and counted only once someone has prompted it. Every other session counts
 from the start, prompted or not. With no pointer (an older or a newer CLI, a server that has not
 written it yet) unprompted sessions are left out as before.
 
-Titles (con.33): the server's status screen lists each attached session as
-"https://claude.ai/code/session_<ID>?from=cli <title>"; the log filter in claudecode-start writes the
-title to RUN_DIR/rc-titles/<ID> whenever it changes (status words such as "Attached" are not titles).
+Titles (con.34): the server's status screen lists each attached session as a link to
+https://claude.ai/code/session_<ID> whose text is the title (cut to 35 characters by the CLI), or
+"Attached" when it has none; the log filter in claudecode-start reads exactly the link text (the
+session's activity summary after it is left out) and writes it to RUN_DIR/rc-titles/<ID> whenever it
+changes.
 Each session carries it as `title`, or null.
 """
 import json
@@ -69,15 +72,22 @@ def _descends(pid, spid, ppid, proc):
 
 
 def _server_session(spid, proc, claude_dir):
-    """The <ID> of the server's own session (bridge-pointer.json of its working directory), or None."""
+    """The <ID> of the server's own session (bridge-pointer.json of its working directory), or None.
+
+    The CLI writes the id as session_<ID> or cse_<ID> (it converts between the two freely; the schema fixes
+    neither), so either prefix is accepted. A pointer whose pid is not this server's was left by an earlier run
+    (the new server rewrites it shortly after it starts): it names no session yet."""
     try:
         cwd = os.readlink(f"{proc}/{spid}/cwd")
         key = re.sub(r"[^A-Za-z0-9-]", "-", cwd)
         with open(os.path.join(claude_dir, "projects", key, "bridge-pointer.json")) as f:
-            sid = json.load(f).get("sessionId") or ""
-    except (OSError, ValueError, AttributeError):
+            ptr = json.load(f)
+    except (OSError, ValueError):
         return None
-    return sid[len("session_"):] if sid.startswith("session_") and len(sid) > 8 else None
+    if not isinstance(ptr, dict) or (ptr.get("pid") is not None and ptr.get("pid") != spid):
+        return None
+    m = re.fullmatch(r"(?:session|cse)_([A-Za-z0-9]+)", str(ptr.get("sessionId") or ""))
+    return m.group(1) if m else None
 
 
 def _title(run_dir, sid):

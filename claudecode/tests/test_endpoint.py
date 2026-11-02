@@ -535,7 +535,9 @@ class TestHTTP(EndpointCase):
             self.assertEqual(([x["id"] for x in snap["sessions"]], snap["count"]), (["cse_01titled"], 1))
             self.assertEqual((snap["sessions"][0]["title"], snap["sessions"][0]["server_session"]), ("Game addition to leoarcade", False))
             pointer.parent.mkdir(parents=True)
-            pointer.write_text(json.dumps({"sessionId": "session_01own", "environmentId": "env_01x", "source": "standalone"}))
+            pointer.write_text(json.dumps({"sessionId": "session_01own", "environmentId": "env_01x", "source": "standalone", "pid": os.getpid() + 1}))
+            self.assertEqual([x["id"] for x in self.get("/sessions")[1]["sessions"]], ["cse_01titled"], "an earlier server's pointer names nothing")
+            pointer.write_text(json.dumps({"sessionId": "cse_01own", "environmentId": "env_01x", "source": "standalone", "pid": os.getpid()}))      # either prefix
             snap = self.get("/sessions")[1]
             by_id = {x["id"]: x for x in snap["sessions"]}
             self.assertEqual(sorted(by_id), ["cse_01new", "cse_01own", "cse_01titled"])
@@ -553,20 +555,30 @@ class TestHTTP(EndpointCase):
             shutil.rmtree(titles, ignore_errors=True)
             shutil.rmtree(self.s.home / ".claude" / "projects", ignore_errors=True)
 
-    def test_rc_server_filter_records_titles_not_status_words(self):
-        """claudecode-start's RC_FILTER: a session's title goes to rc-titles/<ID> when it changes; status
-        words are not titles; lines are still logged with the [rc-server] prefix."""
+    def test_rc_server_filter_records_titles_not_activity_or_attached(self):
+        """claudecode-start's sed + RC_FILTER on the status screen's real escapes: a session row is an OSC 8
+        link whose text is the title ("Attached" when it has none), and a working session's activity summary
+        follows the link (dimmed). Only the link text is a title: the activity never reaches rc-titles/<ID>,
+        "Attached" is never written, any query on the link is fine, and the logged copy has no tab."""
         start = (ADDON / "rootfs" / "usr" / "local" / "bin" / "claudecode-start").read_text()
         prog = re.search(r"^RC_FILTER='(.*?)^}'", start, re.S | re.M).group(1) + "}"
-        lines = ["    https://claude.ai/code/session_01AbC?from=cli Game addition to leoarcade",
-                 "    https://claude.ai/code/session_01AbC?from=cli Attached",
-                 "    https://claude.ai/code/session_02XyZ?from=cli   iris-lucky-orbit  ",
-                 "Capacity: 1/32", "    https://claude.ai/code/session_03Q?from=cli Connecting"]
+        sed = re.search(r"sed -u '([^']*)'", start).group(1)
+        link = lambda url, text: f"\x1b]8;;{url}\x07{text}\x1b]8;;\x07"
+        dim = lambda t: f"\x1b[2m{t}\x1b[22m"
+        a, b = "https://claude.ai/code/session_01AbC?from=cli", "https://claude.ai/code/session_02XyZ?from=cli&x=1"
+        lines = ["    " + link(a, "Game addition to leoarcade") + dim(" Reading leoarcade/games.py"),
+                 "    " + link(a, "Game addition to leoarcade"),
+                 "    " + link(b, dim("Attached")) + dim(" Thinking"),
+                 "Capacity: 1/32"]
         with tempfile.TemporaryDirectory() as d:
-            r = subprocess.run(["awk", "-v", f"titles={d}", prog], input="\n".join(lines) + "\n", capture_output=True, text=True, check=True)
+            flat = subprocess.run(["sed", "-u", sed], input="\n".join(lines) + "\n", capture_output=True, text=True, check=True).stdout
+            r = subprocess.run(["awk", "-v", f"titles={d}", prog], input=flat, capture_output=True, text=True, check=True)
             got = {f: (pathlib.Path(d) / f).read_text().strip() for f in sorted(os.listdir(d))}
-        self.assertEqual(got, {"01AbC": "Game addition to leoarcade", "02XyZ": "iris-lucky-orbit"})
-        self.assertEqual(r.stdout.splitlines()[3], "[rc-server] Capacity: 1/32")
+        self.assertEqual(got, {"01AbC": "Game addition to leoarcade"})
+        out = r.stdout.splitlines()
+        self.assertEqual(out[3], "[rc-server] Capacity: 1/32")
+        self.assertTrue(all("\t" not in l and "\x1b" not in l for l in out), out)
+        self.assertIn("Game addition to leoarcade  Reading leoarcade/games.py", out[0])
 
     def test_sessions_route_lists_the_remote_control_servers_live_children(self):
         """remote_control_server off -> "off"; on without a live server pid -> "stopped"; on with one
