@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.11-con.4] - 2026-11-02
+
+### Changed
+- Base image `mcr.microsoft.com/playwright:v1.64.1-noble` (from `v1.57.0-noble`),
+  as upstream 0.1.13. The Claude Code add-on installs `@playwright/mcp`
+  unpinned, so its client tracks the newest Playwright while the browser here
+  only moves with this Dockerfile; seven minor releases apart was getting
+  wide. Same single-stage image as before, so the size concern from
+  0.1.11-con.2 is unchanged either way.
+- `config.yaml` drops `startup: application` and `ingress: false`, the
+  Supervisor's defaults (upstream 0.1.13).
+- README no longer quotes a base-image tag (it said `v1.50.0-noble`, two
+  bumps stale) and documents the client/browser version coupling (upstream
+  0.1.13).
+
 ## [0.1.11-con.3] - 2026-06-09
 
 ### Fixed

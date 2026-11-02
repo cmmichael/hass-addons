@@ -1,13 +1,11 @@
 name: Claude Code
 description: Run Claude Code AI assistant inside Home Assistant to create automations, debug issues, and manage your smart home configuration
-version: "1.2.65-con.32"
+version: "1.2.65-con.33"
 slug: claudecode
 url: https://github.com/con-ant/hass-addons
 arch:
   - amd64
   - aarch64
-startup: application
-boot: auto
 init: true
 # Share the host's UTS namespace so the container's hostname is the Home
 # Assistant host's (e.g. "homeassistant") rather than the add-on slug

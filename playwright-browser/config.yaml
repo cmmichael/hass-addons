@@ -1,15 +1,13 @@
 name: Playwright Browser
 description: Headless Chromium browser with CDP endpoint for browser automation
-version: "0.1.11-con.3"
+version: "0.1.11-con.4"
 slug: playwright-browser
 url: https://github.com/con-ant/hass-addons
 arch:
   - amd64
   - aarch64
-startup: application
 boot: manual
 init: false
-ingress: false
 panel_icon: mdi:google-chrome
 panel_title: Playwright Browser
 options:
