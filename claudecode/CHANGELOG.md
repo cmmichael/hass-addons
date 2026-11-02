@@ -37,6 +37,12 @@ option name, and the `addon_stdin` runner overlaps with Claude Jobs.
   `raw_exchange` does. Test only.
 
 ### Changed
+- The same config tidy as upstream v1.2.76 where it applies here:
+  `build.yaml` no longer lists armv7, armhf and i386 base images, which
+  `config.yaml` stopped offering as architectures long ago, and `config.yaml`
+  drops `startup: application` and `boot: auto`, which are the Supervisor's
+  defaults. `init: true` stays on purpose (see CLAUDE.md: tini vs s6). No
+  behaviour change.
 - Recorded upstream `robsonfelix/robsonfelix-hass-addons` main through
   v1.2.76 (`2955cc8`) as merged with an "ours" merge, as 1.2.65-con.2 did
   for v1.2.65: the fork's tree is unchanged by the merge, GitHub stops

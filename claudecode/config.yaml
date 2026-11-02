@@ -6,8 +6,6 @@ url: https://github.com/con-ant/hass-addons
 arch:
   - amd64
   - aarch64
-startup: application
-boot: auto
 init: true
 # Share the host's UTS namespace so the container's hostname is the Home
 # Assistant host's (e.g. "homeassistant") rather than the add-on slug
